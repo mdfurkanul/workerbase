@@ -1,0 +1,47 @@
+{
+  // WorkerBase — single-package Cloudflare Worker distribution.
+  // Dashboard builds into backend/public and is served via Hono serveStatic.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "workerbase",
+  "main": "backend/src/index.ts",
+  "compatibility_date": "2025-01-15",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // D1 — primary metadata store + dynamic tenant tables.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "workerbase-db",
+      "database_id": "REPLACE_WITH_D1_ID",
+      "migrations_dir": "backend/migrations"
+    }
+  ],
+
+  // R2 — blob/file storage.
+  "r2_buckets": [
+    {
+      "binding": "STORAGE",
+      "bucket_name": "workerbase-storage"
+    }
+  ],
+
+  // Durable Objects — one isolated RealtimeHub instance per collection name.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME",
+        "class_name": "RealtimeHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RealtimeHub"]
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}
