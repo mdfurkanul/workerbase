@@ -33,8 +33,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Forward API calls to the local Wrangler dev server.
-      "/api": "http://localhost:8787",
+      // Forward API calls (but not /api-preview etc) to the local Wrangler dev server.
+      "^/api/.*": "http://localhost:8787",
     },
   },
 });

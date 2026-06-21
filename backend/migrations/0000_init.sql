@@ -3,7 +3,9 @@
 CREATE TABLE IF NOT EXISTS "_collections" (
   "id" TEXT PRIMARY KEY NOT NULL,
   "name" TEXT NOT NULL UNIQUE,
-  "schema" TEXT NOT NULL,
+  "type" TEXT NOT NULL DEFAULT 'base',
+  "schema" TEXT,
+  "query" TEXT,
   "list_rule" TEXT,
   "create_rule" TEXT
 );

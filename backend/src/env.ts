@@ -9,6 +9,8 @@ export interface Env {
   STORAGE: R2Bucket;
   /** Durable Objects — one RealtimeHub instance per collection name. */
   REALTIME: DurableObjectNamespace;
+  /** HMAC secret used to sign/verify session tokens. Set in `.dev.vars`. */
+  AUTH_SECRET: string;
 }
 
 /** Hono context variable bag carrying the request Env + execution context. */
