@@ -7,7 +7,9 @@ import CollectionHeader from "@/components/CollectionHeader";
 import CollectionSettings from "@/components/CollectionSettings";
 import ColumnPicker from "@/components/ColumnPicker";
 import RecordDrawer from "@/components/RecordDrawer";
-import EditCollection from "@/routes/EditCollection";
+import SelectionBar from "@/components/SelectionBar";
+import SlideOver from "@/components/SlideOver";
+import Modal from "@/components/Modal";
 import { useCollections } from "@/hooks/useCollections";
 import { USERS_RECORDS, type Record as Row } from "@/lib/mockData";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
@@ -26,18 +28,10 @@ import { getVisibleColumns, setVisibleColumns } from "@/lib/collectionStore";
 export default function Collections() {
   const [params] = useSearchParams();
   const selected = params.get("collections");
-  const action = params.get("action");
-  const recordId = params.get("record");
 
   if (!selected) return <CollectionsIndex />;
 
-  if (recordId) return <RecordDetail name={selected} id={recordId} />;
-
-  if (action === "new") return <NewRecord name={selected} />;
-  if (action === "edit") return <EditCollection name={selected} />;
-  if (action === "settings") return <CollectionView name={selected} mode="settings" />;
-
-  return <CollectionView name={selected} mode="records" />;
+  return <CollectionView name={selected} />;
 }
 
 /* ─── Collections index (no collection selected) ───────────────────── */
@@ -54,6 +48,7 @@ function CollectionsIndex() {
           </Link>
         }
       />
+      <div className="flex-1 overflow-y-auto">
       <div className="px-6 py-4">
         {error && (
           <div className="mb-3 px-3 py-2 rounded border border-line-strong bg-err-bg text-err text-[12px] font-mono">
@@ -98,21 +93,33 @@ function CollectionsIndex() {
           Refresh
         </button>
       </div>
+      </div>
     </AppShell>
   );
 }
 
-/* ─── Single collection view (records or settings) ─────────────────── */
-function CollectionView({
-  name,
-  mode,
-}: {
-  name: string;
-  mode: "records" | "settings";
-}) {
+/* ─── Single collection view (records + slide-over panels) ─────────── */
+function CollectionView({ name }: { name: string }) {
   const { collections, loading, refresh } = useCollections();
   const collection = collections.find((c) => c.name === name);
   const [tick, setTick] = useState(0);
+  const [params, setParams] = useSearchParams();
+  const action = params.get("action");
+
+  // Slide-over open state derived from the action query param.
+  const slideOpen = action === "edit" || action === "settings" || action === "new";
+
+  function closeSlide() {
+    const next = new URLSearchParams(params);
+    next.delete("action");
+    setParams(next, { replace: true });
+  }
+
+  function openSlide(a: "edit" | "settings" | "new") {
+    const next = new URLSearchParams(params);
+    next.set("action", a);
+    setParams(next, { replace: true });
+  }
 
   if (loading) {
     return (
@@ -150,12 +157,54 @@ function CollectionView({
         count={collection.count}
         onReload={reload}
         reloading={loading}
+        onEdit={() => openSlide("edit")}
+        onSettings={() => openSlide("settings")}
       />
-      {mode === "settings" ? (
+      <RecordsTable
+        key={tick}
+        collectionName={collection.name}
+        schema={collection.schema}
+        onNewRecord={() => openSlide("new")}
+      />
+
+      {/* Slide-over panels */}
+      <SlideOver
+        open={slideOpen && action === "edit"}
+        title="Edit collection"
+        subtitle={collection.name}
+        onClose={closeSlide}
+        footer={
+          <button onClick={closeSlide} className="btn-primary">Done</button>
+        }
+      >
+        <EditPanel collection={collection} onSaved={reload} />
+      </SlideOver>
+
+      <SlideOver
+        open={slideOpen && action === "settings"}
+        title="Collection settings"
+        subtitle={collection.name}
+        onClose={closeSlide}
+      >
         <CollectionSettings collectionName={collection.name} />
-      ) : (
-        <RecordsTable key={tick} collectionName={collection.name} schema={collection.schema} />
-      )}
+      </SlideOver>
+
+      <SlideOver
+        open={slideOpen && action === "new"}
+        title="New record"
+        subtitle={collection.name}
+        onClose={closeSlide}
+        footer={
+          <>
+            <button onClick={closeSlide} className="btn-ghost">Cancel</button>
+            <button onClick={closeSlide} className="btn-primary">
+              <Plus size={14} /> Create record
+            </button>
+          </>
+        }
+      >
+        <NewRecordPanel schema={collection.schema} />
+      </SlideOver>
     </AppShell>
   );
 }
@@ -164,9 +213,11 @@ function CollectionView({
 function RecordsTable({
   collectionName,
   schema,
+  onNewRecord,
 }: {
   collectionName: string;
   schema: { name: string; type: string }[];
+  onNewRecord?: () => void;
 }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -183,6 +234,11 @@ function RecordsTable({
 
   // Drawer state — purely local; not in the URL.
   const [drawerRow, setDrawerRow] = useState<Row | null>(null);
+
+  // Bulk selection + deletion (session-only, in-memory).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Visible columns (per-collection, persisted in localStorage).
   const allColumns = useMemo(
@@ -208,9 +264,10 @@ function RecordsTable({
 
   // For the demo only `users` is seeded with rows.
   const rows: Row[] = useMemo(() => {
-    if (collectionName === "users") return USERS_RECORDS;
-    return [];
-  }, [collectionName]);
+    const seed = collectionName === "users" ? USERS_RECORDS : [];
+    // Drop session-deleted records so the table reflects bulk-delete actions.
+    return seed.filter((r) => !deletedIds.has(r.id));
+  }, [collectionName, deletedIds]);
 
   const filteredRows = useMemo(() => {
     let r = rows;
@@ -242,6 +299,59 @@ function RecordsTable({
           <Cell value={r[f.name]} />
         ),
     }));
+
+  // ─── Selection handlers ───────────────────────────────────────────
+  function toggleRow(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll(ids: string[], checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) ids.forEach((id) => next.add(id));
+      else ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  // Selected rows (across all pages, in original order).
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selectedIds.has(r.id)),
+    [rows, selectedIds],
+  );
+
+  function handleDownload() {
+    if (selectedRows.length === 0) return;
+    const payload = JSON.stringify(selectedRows, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${collectionName}-selected-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleDelete() {
+    setDeletedIds((prev) => {
+      const next = new Set(prev);
+      selectedIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setSelectedIds(new Set());
+    setConfirmOpen(false);
+  }
 
   function update(p: Record<string, string | null>) {
     const next = new URLSearchParams(params);
@@ -313,6 +423,9 @@ function RecordsTable({
           columns={columns}
           rows={pageRows}
           onRowAction={(row) => setDrawerRow(row)}
+          selectedIds={selectedIds}
+          onToggleRow={toggleRow}
+          onToggleAll={toggleAll}
           empty={
             columns.length === 0
               ? "No columns selected — pick at least one from Columns."
@@ -394,6 +507,40 @@ function RecordsTable({
         snapshot={drawerSnapshot}
         onClose={() => setDrawerRow(null)}
       />
+
+      <SelectionBar
+        count={selectedIds.size}
+        onClear={clearSelection}
+        onDelete={() => setConfirmOpen(true)}
+        onDownload={handleDownload}
+      />
+
+      <Modal
+        open={confirmOpen}
+        title={`Delete ${selectedIds.size} ${selectedIds.size === 1 ? "record" : "records"}?`}
+        onClose={() => setConfirmOpen(false)}
+        footer={
+          <>
+            <button onClick={() => setConfirmOpen(false)} className="btn-ghost">
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              className="btn-primary"
+              style={{ background: "var(--err)", color: "#fff" }}
+            >
+              Delete {selectedIds.size > 0 ? selectedIds.size : ""} record{selectedIds.size === 1 ? "" : "s"}
+            </button>
+          </>
+        }
+      >
+        <p>
+          You are about to permanently delete{" "}
+          <span className="font-mono text-ink">{selectedIds.size}</span>{" "}
+          {selectedIds.size === 1 ? "record" : "records"} from{" "}
+          <span className="font-mono text-ink">{collectionName}</span>. This cannot be undone.
+        </p>
+      </Modal>
     </>
   );
 }
@@ -462,7 +609,7 @@ function NewRecord({ name }: { name: string }) {
           e.preventDefault();
           navigate(buildCollectionUrl(name));
         }}
-        className="max-w-2xl px-6 py-6 space-y-4"
+        className="max-w-2xl px-6 py-6 space-y-4 flex-1 overflow-y-auto"
       >
         <span className="label-mono">Record values</span>
         <div className="space-y-3">
@@ -504,7 +651,7 @@ function RecordDetail({ name, id }: { name: string; id: string }) {
           <span className="font-mono">{id}</span>,
         ]}
       />
-      <div className="max-w-2xl px-6 py-6 space-y-4">
+      <div className="max-w-2xl px-6 py-6 space-y-4 flex-1 overflow-y-auto">
         {!record ? (
           <div className="bg-surface border border-line rounded p-6 text-center text-ink-muted text-[13px]">
             No record loaded for <span className="font-mono text-ink">{id}</span>. (Mock — real data pending.)

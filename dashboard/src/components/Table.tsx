@@ -14,6 +14,12 @@ interface DataTableProps<T> {
   empty?: ReactNode;
   /** Click handler for the trailing action button on each row. */
   onRowAction?: (row: T) => void;
+  /** Currently selected row ids. */
+  selectedIds?: Set<string>;
+  /** Toggle a single row's selection. */
+  onToggleRow?: (id: string) => void;
+  /** Toggle all rows on the current page. */
+  onToggleAll?: (ids: string[], checked: boolean) => void;
 }
 
 export function DataTable<T extends { id: string }>({
@@ -21,14 +27,35 @@ export function DataTable<T extends { id: string }>({
   rows,
   empty,
   onRowAction,
+  selectedIds,
+  onToggleRow,
+  onToggleAll,
 }: DataTableProps<T>) {
+  const selectable = !!onToggleRow && !!selectedIds;
+  const pageIds = rows.map((r) => r.id);
+  const allChecked = selectable && pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const someChecked = selectable && !allChecked && pageIds.some((id) => selectedIds.has(id));
+
   return (
     <div className="bg-surface hairline-b border border-line overflow-x-auto">
       <table className="w-full text-[13px]">
         <thead>
           <tr className="hairline-b bg-surface-2">
             <th className="w-10 px-3 py-2 text-left">
-              <input type="checkbox" className="accent-brand" />
+              {selectable && onToggleAll ? (
+                <input
+                  type="checkbox"
+                  className="accent-brand"
+                  checked={allChecked}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someChecked;
+                  }}
+                  onChange={(e) => onToggleAll(pageIds, e.target.checked)}
+                  title="Select all on this page"
+                />
+              ) : (
+                <input type="checkbox" className="accent-brand" disabled />
+              )}
             </th>
             {columns.map((c) => (
               <th
@@ -49,32 +76,44 @@ export function DataTable<T extends { id: string }>({
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
-              <tr
-                key={row.id}
-                className="hairline-b last:border-b-0 hover:bg-surface-2 transition"
-              >
-                <td className="px-3 py-2.5">
-                  <input type="checkbox" className="accent-brand" />
-                </td>
-                {columns.map((c) => (
-                  <td key={c.key} className={`px-3 py-2.5 align-middle ${c.className ?? ""}`}>
-                    {c.cell(row)}
+            rows.map((row) => {
+              const checked = selectable && selectedIds.has(row.id);
+              return (
+                <tr
+                  key={row.id}
+                  className={`hairline-b last:border-b-0 transition ${
+                    checked ? "bg-brand/10" : "hover:bg-surface-2"
+                  }`}
+                >
+                  <td className="px-3 py-2.5">
+                    {selectable && (
+                      <input
+                        type="checkbox"
+                        className="accent-brand"
+                        checked={checked}
+                        onChange={() => onToggleRow!(row.id)}
+                      />
+                    )}
                   </td>
-                ))}
-                <td className="px-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => onRowAction?.(row)}
-                    className="btn-icon"
-                    title="Open record"
-                    aria-label="Open record"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))
+                  {columns.map((c) => (
+                    <td key={c.key} className={`px-3 py-2.5 align-middle ${c.className ?? ""}`}>
+                      {c.cell(row)}
+                    </td>
+                  ))}
+                  <td className="px-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onRowAction?.(row)}
+                      className="btn-icon"
+                      title="Open record"
+                      aria-label="Open record"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>

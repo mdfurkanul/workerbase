@@ -1,12 +1,19 @@
 import type { CollectionType } from "@/lib/mockData";
+import { collectionTypeMeta, collectionTypeTag } from "@/lib/collectionTypes";
 
-const MAP: Record<CollectionType, { label: string; cls: string }> = {
-  base: { label: "BASE", cls: "badge-muted" },
-  user: { label: "USER", cls: "badge-warn" },
-  view: { label: "VIEW", cls: "badge-ok" },
-};
-
-export default function TypeBadge({ type }: { type: CollectionType }) {
-  const m = MAP[type] ?? MAP.base;
-  return <span className={`badge ${m.cls}`}>{m.label}</span>;
+export default function TypeBadge({
+  type,
+  withIcon = false,
+}: {
+  type: CollectionType;
+  withIcon?: boolean;
+}) {
+  const m = collectionTypeMeta(type);
+  const Icon = m.Icon;
+  return (
+    <span className={`badge ${m.badgeCls} inline-flex items-center gap-1`}>
+      {withIcon && <Icon size={10} />}
+      {collectionTypeTag(type)}
+    </span>
+  );
 }

@@ -1,6 +1,4 @@
-import { Link } from "react-router-dom";
 import { Pencil, RefreshCw, Settings as Gear } from "lucide-react";
-import { buildCollectionUrl } from "@/lib/collectionUrl";
 import TypeBadge from "@/components/TypeBadge";
 
 interface CollectionHeaderProps {
@@ -9,18 +7,18 @@ interface CollectionHeaderProps {
   count?: number;
   onReload?: () => void;
   reloading?: boolean;
+  onEdit?: () => void;
+  onSettings?: () => void;
 }
 
-/**
- * Top of a collection page — name, type badge, row count, and three actions:
- * reload, edit, settings. Matches the user's spec.
- */
 export default function CollectionHeader({
   name,
   type,
   count,
   onReload,
   reloading,
+  onEdit,
+  onSettings,
 }: CollectionHeaderProps) {
   return (
     <div className="px-6 py-4 hairline-b bg-bg-elev flex items-center justify-between gap-4 flex-wrap">
@@ -45,20 +43,22 @@ export default function CollectionHeader({
         >
           <RefreshCw size={15} className={reloading ? "animate-spin" : ""} />
         </button>
-        <Link
-          to={buildCollectionUrl(name, { action: "edit" })}
+        <button
+          onClick={onEdit}
+          disabled={!onEdit}
           className="btn-ghost text-[12px]"
           title="Edit collection schema"
         >
           <Pencil size={13} /> Edit
-        </Link>
-        <Link
-          to={buildCollectionUrl(name, { action: "settings" })}
+        </button>
+        <button
+          onClick={onSettings}
+          disabled={!onSettings}
           className="btn-ghost text-[12px]"
           title="Collection settings & permissions"
         >
           <Gear size={13} /> Settings
-        </Link>
+        </button>
       </div>
     </div>
   );

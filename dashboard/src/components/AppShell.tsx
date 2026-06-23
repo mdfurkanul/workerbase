@@ -2,9 +2,10 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   ChevronDown,
+  ChevronRight,
   Code2,
-  Database,
   FileText,
+  Network,
   Pin,
   PinOff,
   Plus,
@@ -14,26 +15,36 @@ import {
   Shield,
   Terminal,
   User,
+  X,
 } from "lucide-react";
 import { SYSTEM_LINKS, APP_VERSION } from "@/lib/mockData";
+import type { Collection } from "@/lib/mockData";
+import { collectionTypeMeta } from "@/lib/collectionTypes";
 import { useAuth } from "@/hooks/useAuth";
 import { useCollections } from "@/hooks/useCollections";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
 import { getPinnedCollections, togglePinned } from "@/lib/collectionStore";
 import ThemeToggle from "@/components/ThemeToggle";
+import CollectionOverview from "@/components/CollectionOverview";
 
 /**
- * Dashboard chrome — orange top bar, fixed sidebar (Collections + System),
- * and an Outlet for the active route. Inspired by the PocketBase admin
- * layout but with Cloudflare-orange branding and dual theme support.
+ * Dashboard chrome — orange top bar + optional Collections sidebar.
+ * Pass `hideSidebar` for routes (e.g. Settings) that ship their own
+ * sub-sidebar.
  */
-export default function AppShell({ children }: { children: ReactNode }) {
+export default function AppShell({
+  children,
+  hideSidebar = false,
+}: {
+  children: ReactNode;
+  hideSidebar?: boolean;
+}) {
   return (
-    <div className="min-h-screen flex flex-col bg-bg text-ink">
+    <div className="h-screen overflow-hidden flex flex-col bg-bg text-ink">
       <TopBar />
-      <div className="flex-1 flex">
-        <Sidebar />
-        <main className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 flex min-h-0">
+        {!hideSidebar && <Sidebar />}
+        <main className="flex-1 min-w-0 flex flex-col min-h-0">
           {children}
         </main>
       </div>
@@ -79,6 +90,7 @@ function TopBar() {
           <nav className="hidden sm:flex items-center gap-1">
             {navItem("/api-preview", "API", <Code2 size={14} />)}
             {navItem("/logs", "Logs", <Terminal size={14} />)}
+            {navItem("/sql", "SQL", <FileText size={14} />)}
             {navItem("/settings", "Settings", <SettingsIcon size={14} />)}
           </nav>
         </div>
@@ -157,6 +169,8 @@ function Sidebar() {
   const { collections, loading, error } = useCollections();
   const [query, setQuery] = useState("");
   const [pinned, setPinned] = useState<string[]>(() => getPinnedCollections());
+  const [systemOpen, setSystemOpen] = useState(true);
+  const [overviewOpen, setOverviewOpen] = useState(false);
 
   // Filter by query (case-insensitive substring on name).
   const filtered = useMemo(() => {
@@ -178,9 +192,19 @@ function Sidebar() {
       {/* Header row */}
       <div className="px-3 pt-4 pb-2 flex items-center justify-between">
         <span className="label-mono">Collections</span>
-        <Link to="/collections/new" className="btn-icon" title="New collection">
-          <Plus size={14} />
-        </Link>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setOverviewOpen(true)}
+            className="btn-icon"
+            title="Collection overview"
+            aria-label="Collection overview"
+          >
+            <Network size={14} />
+          </button>
+          <Link to="/collections/new" className="btn-icon" title="New collection">
+            <Plus size={14} />
+          </Link>
+        </div>
       </div>
 
       {/* Filter input */}
@@ -245,21 +269,40 @@ function Sidebar() {
         )}
       </nav>
 
-      {/* System — inside the same scroll container as Collections */}
-      <div className="px-3 pt-4 pb-2">
-        <span className="label-mono">System</span>
+      {/* System — collapsible group */}
+      <div className="px-3 pt-4 pb-1">
+        <button
+          onClick={() => setSystemOpen((v) => !v)}
+          className="w-full flex items-center justify-between rounded hover:bg-surface-2 transition px-1 py-0.5 group"
+          aria-expanded={systemOpen}
+        >
+          <span className="label-mono inline-flex items-center gap-1.5">
+            {systemOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            System
+          </span>
+          <span className="label-mono text-ink-faint">{SYSTEM_LINKS.length}</span>
+        </button>
       </div>
-      <nav className="px-2 space-y-0.5 pb-3">
-        {SYSTEM_LINKS.map((s) => (
-          <SidebarItem
-            key={s.name}
-            to={buildCollectionUrl(s.name)}
-            label={s.name}
-            icon={<Shield size={13} />}
-          />
-        ))}
-      </nav>
+      {systemOpen && (
+        <nav className="px-2 space-y-0.5 pb-3">
+          {SYSTEM_LINKS.map((s) => (
+            <SidebarItem
+              key={s.name}
+              to={buildCollectionUrl(s.name)}
+              label={s.name}
+              icon={<Shield size={13} />}
+            />
+          ))}
+        </nav>
+      )}
       </div>
+
+      {/* Collection overview modal */}
+      <CollectionOverview
+        open={overviewOpen}
+        onClose={() => setOverviewOpen(false)}
+        collections={collections}
+      />
 
       {/* Footer — version */}
       <div className="px-3 py-3 hairline-t shrink-0">
@@ -331,6 +374,13 @@ function SidebarItem({
     <NavLink
       to={to}
       title={label}
+      draggable
+      onDragStart={(e) => {
+        // Payload used by the SQL editor drop-zone.
+        e.dataTransfer.setData("application/x-workerbase-collection", label);
+        e.dataTransfer.setData("text/plain", label);
+        e.dataTransfer.effectAllowed = "copy";
+      }}
       className={[
         "group flex items-center gap-2 px-2 py-1.5 rounded text-[13px] font-mono transition-colors duration-120",
         isActive
@@ -365,9 +415,9 @@ function SidebarItem({
 }
 
 function CollectionIcon({ type }: { type: "base" | "user" | "view" }) {
-  if (type === "user") return <User size={13} />;
-  if (type === "view") return <Search size={13} />;
-  return <Database size={13} />;
+  const m = collectionTypeMeta(type);
+  const Icon = m.Icon;
+  return <Icon size={13} />;
 }
 
 /* ─── Page header ──────────────────────────────────────────────────── */

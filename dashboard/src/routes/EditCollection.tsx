@@ -160,6 +160,7 @@ export default function EditCollection({ name }: { name: string }) {
         ]}
       />
 
+      <div className="flex-1 overflow-y-auto">
       <form onSubmit={handleSubmit} className="max-w-3xl px-6 py-6 space-y-6">
         {/* Identity (read-only) */}
         <section className="grid grid-cols-2 gap-3">
@@ -309,6 +310,7 @@ export default function EditCollection({ name }: { name: string }) {
           </button>
         </div>
       </section>
+      </div>
 
       {/* Confirm modal */}
       <Modal

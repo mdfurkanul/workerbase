@@ -9,6 +9,7 @@ import Collections from "@/routes/Collections";
 import NewCollection from "@/routes/NewCollection";
 import ApiPreview from "@/routes/ApiPreview";
 import Logs from "@/routes/Logs";
+import SqlConsole from "@/routes/SqlConsole";
 import Settings from "@/routes/Settings";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import "./index.css";
@@ -38,6 +39,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/collections" element={<Collections />} />
                 <Route path="/api-preview" element={<ApiPreview />} />
                 <Route path="/logs" element={<Logs />} />
+                <Route path="/sql" element={<SqlConsole />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

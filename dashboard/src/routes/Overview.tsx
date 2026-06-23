@@ -15,6 +15,7 @@ export default function Overview() {
 
   return (
     <AppShell>
+      <div className="flex-1 overflow-y-auto">
       <div className="px-6 pt-5 pb-3 flex items-end justify-between">
         <div>
           <span className="label-mono">Overview</span>
@@ -45,6 +46,8 @@ export default function Overview() {
           Failed to load collections: {error}
         </div>
       )}
+
+      {/* Requests-over-time chart lives on the Logs page */}
 
       <div className="px-6 py-4 grid lg:grid-cols-[1.5fr_1fr] gap-4">
         {/* Collections index */}
@@ -103,6 +106,7 @@ export default function Overview() {
             ))}
           </ul>
         </section>
+      </div>
       </div>
     </AppShell>
   );
