@@ -13,6 +13,8 @@ import {
   X,
 } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
+import AuthConfig, { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/components/AuthConfig";
+import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
 import { COLLECTION_TYPES, collectionTypeMeta } from "@/lib/collectionTypes";
 import {
   groupedFieldTypes,
@@ -124,7 +126,9 @@ export default function NewCollection() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [indexes, setIndexes] = useState<IndexDef[]>([]);
   const [constraints, setConstraints] = useState<ConstraintDef[]>([]);
-  const [tab, setTab] = useState<"schema" | "rules">("schema");
+  const [tab, setTab] = useState<"schema" | "auth" | "templates" | "rules">("schema");
+  const [authSettings, setAuthSettings] = useState<AuthSettings>(DEFAULT_AUTH_SETTINGS);
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplates>(DEFAULT_TEMPLATES);
   const [perms, setPerms] = useState<Record<string, string>>({
     view: "authenticated",
     list: "authenticated",
@@ -282,6 +286,16 @@ export default function NewCollection() {
             <TabBtn active={tab === "schema"} onClick={() => setTab("schema")}>
               Schema
             </TabBtn>
+            {type === "user" && (
+              <TabBtn active={tab === "auth"} onClick={() => setTab("auth")}>
+                Auth
+              </TabBtn>
+            )}
+            {type === "user" && (
+              <TabBtn active={tab === "templates"} onClick={() => setTab("templates")}>
+                Email templates
+              </TabBtn>
+            )}
             <TabBtn active={tab === "rules"} onClick={() => setTab("rules")}>
               API rules
             </TabBtn>
@@ -441,6 +455,14 @@ export default function NewCollection() {
               </section>
             </>
           ))} {/* end schema tab */}
+
+          {tab === "auth" && type === "user" && (
+            <AuthConfig settings={authSettings} onChange={setAuthSettings} />
+          )}
+
+          {tab === "templates" && type === "user" && (
+            <EmailTemplatesEditor templates={emailTemplates} onChange={setEmailTemplates} />
+          )}
 
           {tab === "rules" && (
             <RulesEditor perms={perms} onChange={setPerms} collectionType={type} />

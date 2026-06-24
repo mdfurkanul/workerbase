@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronRight, Plus, Search } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
@@ -9,11 +9,14 @@ import ColumnPicker from "@/components/ColumnPicker";
 import RecordDrawer from "@/components/RecordDrawer";
 import SelectionBar from "@/components/SelectionBar";
 import SlideOver from "@/components/SlideOver";
+import SchemaEditor, { type SchemaData, type Field as SchemaField } from "@/components/SchemaEditor";
+import AuthConfig, { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/components/AuthConfig";
+import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
 import Modal from "@/components/Modal";
 import { useCollections } from "@/hooks/useCollections";
-import { USERS_RECORDS, type Record as Row } from "@/lib/mockData";
+import { USERS_RECORDS, type Record as Row, type Collection } from "@/lib/mockData";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
-import { getVisibleColumns, setVisibleColumns } from "@/lib/collectionStore";
+import { getVisibleColumns, setVisibleColumns, saveEditedSchema, setEditedName } from "@/lib/collectionStore";
 
 /**
  * Single router for every collection URL. The sub-view is chosen by
@@ -103,6 +106,7 @@ function CollectionView({ name }: { name: string }) {
   const { collections, loading, refresh } = useCollections();
   const collection = collections.find((c) => c.name === name);
   const [tick, setTick] = useState(0);
+  const editSaveRef = useRef<(() => void) | null>(null);
   const [params, setParams] = useSearchParams();
   const action = params.get("action");
 
@@ -174,10 +178,25 @@ function CollectionView({ name }: { name: string }) {
         subtitle={collection.name}
         onClose={closeSlide}
         footer={
-          <button onClick={closeSlide} className="btn-primary">Done</button>
+          <>
+            <button onClick={closeSlide} className="btn-ghost">Cancel</button>
+            <button
+              onClick={() => {
+                editSaveRef.current?.();
+                closeSlide();
+              }}
+              className="btn-primary"
+            >
+              Save changes
+            </button>
+          </>
         }
       >
-        <EditPanel collection={collection} onSaved={reload} />
+        <EditPanel
+          collection={collection}
+          onSaved={reload}
+          registerSave={(fn) => { editSaveRef.current = fn; }}
+        />
       </SlideOver>
 
       <SlideOver
@@ -410,12 +429,12 @@ function RecordsTable({
           visible={visible}
           onChange={handleVisibleChange}
         />
-        <Link
-          to={buildCollectionUrl(collectionName, { action: "new" })}
+        <button
+          onClick={onNewRecord}
           className="btn-primary text-[12px] ml-auto"
         >
           <Plus size={13} /> New record
-        </Link>
+        </button>
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
@@ -560,123 +579,160 @@ function buildPageList(current: number, total: number): Array<number | "…"> {
   return out;
 }
 
-/* ─── New record sub-view ──────────────────────────────────────────── */
-function NewRecord({ name }: { name: string }) {
-  const navigate = useNavigate();
-  const { collections, loading } = useCollections();
-  const collection = collections.find((c) => c.name === name);
-  const [values, setValues] = useState<Record<string, string>>({});
+/* ─── SlideOver panel: edit collection (name + full schema editor) ── */
+function EditPanel({
+  collection,
+  onSaved,
+  registerSave,
+}: {
+  collection: Collection;
+  onSaved: () => void;
+  registerSave: (fn: () => void) => void;
+}) {
+  const [name, setName] = useState(collection.name);
+  const [authSettings, setAuthSettings] = useState<AuthSettings>(DEFAULT_AUTH_SETTINGS);
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplates>(DEFAULT_TEMPLATES);
+  const [editTab, setEditTab] = useState<"schema" | "auth" | "templates">("schema");
+  const schemaData = useRef<SchemaData>({
+    fields: collection.schema.map((f, i) => ({
+      cid: `existing_${i}`,
+      name: f.name,
+      type: (f.type as SchemaField["type"]) ?? "text",
+      required: false,
+      unique: false,
+      hidden: false,
+      options: {},
+      locked: ["id", "created", "updated", "created_at"].includes(f.name),
+      primaryKey: f.name === "id",
+      auto: f.name === "created" || f.name === "updated",
+    })),
+    indexes: [],
+    constraints: [],
+  });
 
-  if (loading) {
-    return (
-      <AppShell>
-        <PageHeader
-          breadcrumbs={[
-            <Link to="/collections" className="hover:text-ink">Collections</Link>,
-            <Link to={buildCollectionUrl(name)} className="font-mono hover:text-ink">{name}</Link>,
-            <span>New record</span>,
-          ]}
+  function handleSave() {
+    const data = schemaData.current;
+    // Persist schema overrides (only fields with names).
+    const cleanSchema = data.fields
+      .filter((f) => f.name)
+      .map((f) => ({ name: f.name, type: f.type }));
+    saveEditedSchema(collection.name, cleanSchema);
+    // Persist name override (if changed).
+    if (name !== collection.name) {
+      setEditedName(collection.name, name);
+    }
+    onSaved();
+  }
+
+  registerSave(handleSave);
+
+  return (
+    <div className="px-5 py-5 space-y-5">
+      {/* Name */}
+      <section className="space-y-2">
+        <span className="label-mono">Collection name</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          pattern="[a-zA-Z][a-zA-Z0-9_]*"
+          className="field-input font-mono"
+          placeholder="collection_name"
         />
-        <div className="px-6 py-16 text-center text-ink-muted text-[13px]">Loading…</div>
-      </AppShell>
-    );
-  }
+      </section>
 
-  if (!collection) {
-    return (
-      <AppShell>
-        <PageHeader breadcrumbs={["Collections", name, "New"]} />
-        <div className="px-6 py-16 text-center text-ink-muted">Collection not found.</div>
-      </AppShell>
-    );
-  }
+      {/* Tab bar — Schema | Auth | Email templates (auth collections only) */}
+      {collection.type === "user" && (
+        <div className="flex items-center gap-1 hairline-b">
+          <button
+            type="button"
+            onClick={() => setEditTab("schema")}
+            className={`px-3 py-2 text-[13px] font-medium border-b-2 transition ${
+              editTab === "schema" ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink"
+            }`}
+          >
+            Schema
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditTab("auth")}
+            className={`px-3 py-2 text-[13px] font-medium border-b-2 transition ${
+              editTab === "auth" ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink"
+            }`}
+          >
+            Auth
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditTab("templates")}
+            className={`px-3 py-2 text-[13px] font-medium border-b-2 transition ${
+              editTab === "templates" ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink"
+            }`}
+          >
+            Email templates
+          </button>
+        </div>
+      )}
 
-  const fields = collection.schema.filter(
+      {/* Schema editor */}
+      {collection.type !== "user" || editTab === "schema" ? (
+        <SchemaEditor
+          initialFields={schemaData.current.fields}
+          initialIndexes={schemaData.current.indexes}
+          initialConstraints={schemaData.current.constraints}
+          onDataChange={(data) => {
+            schemaData.current = data;
+          }}
+        />
+      ) : null}
+
+      {/* Auth config (auth collections only) */}
+      {collection.type === "user" && editTab === "auth" && (
+        <AuthConfig settings={authSettings} onChange={setAuthSettings} />
+      )}
+
+      {/* Email templates (auth collections only) */}
+      {collection.type === "user" && editTab === "templates" && (
+        <EmailTemplatesEditor templates={emailTemplates} onChange={setEmailTemplates} />
+      )}
+    </div>
+  );
+}
+
+/* ─── SlideOver panel: new record ─────────────────────────────────── */
+function NewRecordPanel({
+  schema,
+}: {
+  schema: { name: string; type: string }[];
+}) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const fields = schema.filter(
     (f) => f.name !== "id" && f.name !== "created" && f.name !== "updated",
   );
 
   return (
-    <AppShell>
-      <PageHeader
-        breadcrumbs={[
-          <Link to="/collections" className="hover:text-ink">Collections</Link>,
-          <Link to={buildCollectionUrl(name)} className="font-mono hover:text-ink">{name}</Link>,
-          <span>New record</span>,
-        ]}
-      />
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          navigate(buildCollectionUrl(name));
-        }}
-        className="max-w-2xl px-6 py-6 space-y-4 flex-1 overflow-y-auto"
-      >
-        <span className="label-mono">Record values</span>
-        <div className="space-y-3">
-          {fields.map((f) => (
-            <label key={f.name} className="block">
-              <span className="label-mono">
-                {f.name} <span className="text-ink-faint normal-case font-normal">· {f.type}</span>
-              </span>
-              <input
-                value={values[f.name] ?? ""}
-                onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
-                placeholder={`Enter ${f.type} value`}
-                className="field-input mt-1"
-              />
-            </label>
-          ))}
-        </div>
-        <div className="pt-4 hairline-t flex items-center justify-between">
-          <Link to={buildCollectionUrl(name)} className="btn-ghost">Cancel</Link>
-          <button type="submit" className="btn-primary">
-            <Plus size={14} /> Create record
-          </button>
-        </div>
-      </form>
-    </AppShell>
-  );
-}
-
-/* ─── Record detail sub-view ───────────────────────────────────────── */
-function RecordDetail({ name, id }: { name: string; id: string }) {
-  const record = name === "users" ? USERS_RECORDS.find((r) => r.id === id) : undefined;
-
-  return (
-    <AppShell>
-      <PageHeader
-        breadcrumbs={[
-          <Link to="/collections" className="hover:text-ink">Collections</Link>,
-          <Link to={buildCollectionUrl(name)} className="font-mono hover:text-ink">{name}</Link>,
-          <span className="font-mono">{id}</span>,
-        ]}
-      />
-      <div className="max-w-2xl px-6 py-6 space-y-4 flex-1 overflow-y-auto">
-        {!record ? (
-          <div className="bg-surface border border-line rounded p-6 text-center text-ink-muted text-[13px]">
-            No record loaded for <span className="font-mono text-ink">{id}</span>. (Mock — real data pending.)
-          </div>
-        ) : (
-          <dl className="bg-surface border border-line rounded divide-y divide-line">
-            {Object.entries(record).map(([k, v]) => (
-              <div key={k} className="grid grid-cols-[160px_1fr] gap-4 px-4 py-3">
-                <dt className="font-mono text-[12px] text-ink-muted">{k}</dt>
-                <dd className="text-[13px]">
-                  {v === null || v === undefined ? (
-                    <span className="text-ink-faint">N/A</span>
-                  ) : typeof v === "boolean" ? (
-                    v ? <span className="badge badge-ok">true</span> : <span className="badge badge-muted">false</span>
-                  ) : typeof v === "string" && v.startsWith("http") ? (
-                    <a href={v} target="_blank" rel="noreferrer" className="text-brand hover:underline break-all">{v}</a>
-                  ) : (
-                    <span className="break-all">{String(v)}</span>
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </div>
-    </AppShell>
+    <div className="px-5 py-5 space-y-4">
+      {fields.length === 0 ? (
+        <p className="text-[13px] text-ink-muted">
+          This collection has no editable fields yet.
+        </p>
+      ) : (
+        fields.map((f) => (
+          <label key={f.name} className="block">
+            <span className="label-mono">
+              {f.name}{" "}
+              <span className="text-ink-faint normal-case font-normal">· {f.type}</span>
+            </span>
+            <input
+              value={values[f.name] ?? ""}
+              onChange={(e) =>
+                setValues((v) => ({ ...v, [f.name]: e.target.value }))
+              }
+              placeholder={`Enter ${f.type} value`}
+              className="field-input mt-1"
+            />
+          </label>
+        ))
+      )}
+    </div>
   );
 }

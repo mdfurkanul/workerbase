@@ -13,6 +13,7 @@ import type { Collection, CollectionField } from "@/lib/mockData";
 
 const DELETED_KEY = "workerbase.deletedCollections";
 const SCHEMA_PREFIX = "workerbase.schema.";
+const NAME_PREFIX = "workerbase.name.";
 const PERMISSIONS_PREFIX = "workerbase.permissions.";
 const PINNED_KEY = "workerbase.pinnedCollections";
 const COLUMNS_PREFIX = "workerbase.columns.";
@@ -70,6 +71,19 @@ export function saveEditedSchema(name: string, schema: CollectionField[]): void 
   writeJson(schemaKey(name), schema);
 }
 
+/* ─── Edited names ─────────────────────────────────────────────────── */
+function nameKey(name: string): string {
+  return `${NAME_PREFIX}${name}`;
+}
+
+export function getEditedName(name: string): string | null {
+  return readJson<string | null>(nameKey(name), null);
+}
+
+export function setEditedName(originalName: string, newName: string): void {
+  writeJson(nameKey(originalName), newName);
+}
+
 export function clearEditedSchema(name: string): void {
   try {
     localStorage.removeItem(schemaKey(name));
@@ -85,7 +99,12 @@ export function applyOverrides(collections: Collection[]): Collection[] {
     .filter((c) => !deleted.has(c.name))
     .map((c) => {
       const edited = getEditedSchema(c.name);
-      return edited ? { ...c, schema: edited } : c;
+      const editedName = getEditedName(c.name);
+      return {
+        ...c,
+        name: editedName ?? c.name,
+        schema: edited ?? c.schema,
+      };
     });
 }
 
