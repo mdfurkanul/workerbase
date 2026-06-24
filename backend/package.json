@@ -5,12 +5,14 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --env local",
     "build": "tsc --noEmit",
-    "deploy": "wrangler deploy",
+    "deploy:preprod": "wrangler deploy --env preprod",
+    "deploy:prod": "wrangler deploy --env prod",
+    "deploy": "wrangler deploy --env prod",
     "typecheck": "tsc --noEmit",
     "generate": "drizzle-kit generate",
-    "migrate": "drizzle-kit migrate"
+    "migrate": "drangler-kit migrate"
   },
   "dependencies": {
     "drizzle-orm": "^0.36.4",

@@ -8,13 +8,33 @@
     "dashboard"
   ],
   "scripts": {
-    "dev:backend": "npm run dev --workspace backend",
+    "dev:backend": "wrangler dev --env local",
     "dev:dashboard": "npm run dev --workspace dashboard",
     "dev": "concurrently -n backend,dashboard -c blue,magenta \"npm:dev:backend\" \"npm:dev:dashboard\"",
     "build:dashboard": "npm run build --workspace dashboard",
     "build:backend": "npm run build --workspace backend",
     "build": "npm run build:dashboard && npm run build:backend",
-    "deploy": "npm run build:dashboard && npm run deploy --workspace backend",
+
+    "migrate:local": "wrangler d1 migrations apply workerbase-db-local --local",
+    "migrate:preprod": "wrangler d1 migrations apply workerbase-db-preprod --remote --env preprod",
+    "migrate:prod": "wrangler d1 migrations apply workerbase-db-prod --remote --env prod",
+
+    "db:create:preprod": "wrangler d1 create workerbase-db-preprod",
+    "db:create:prod": "wrangler d1 create workerbase-db-prod",
+
+    "bucket:create:preprod": "wrangler r2 bucket create workerbase-storage-preprod",
+    "bucket:create:prod": "wrangler r2 bucket create workerbase-storage-prod",
+
+    "secret:preprod": "wrangler secret put AUTH_SECRET --env preprod",
+    "secret:prod": "wrangler secret put AUTH_SECRET --env prod",
+
+    "deploy:preprod": "npm run build:dashboard && wrangler deploy --env preprod",
+    "deploy:prod": "npm run build:dashboard && wrangler deploy --env prod",
+    "deploy": "npm run deploy:prod",
+
+    "tail:preprod": "wrangler tail workerbase-preprod",
+    "tail:prod": "wrangler tail workerbase-prod",
+
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

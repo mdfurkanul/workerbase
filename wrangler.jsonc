@@ -1,23 +1,42 @@
 {
   // WorkerBase — single-package Cloudflare Worker distribution.
   // Dashboard builds into backend/public and is served via Hono serveStatic.
+  //
+  // Environments:
+  //   local   — `npx wrangler dev --env local` (D1/R2 live in .wrangler/state)
+  //   preprod — `npx wrangler deploy --env preprod`
+  //   prod    — `npx wrangler deploy --env prod`
+  //
+  // Create remote D1 databases:
+  //   npx wrangler d1 create workerbase-db-preprod
+  //   npx wrangler d1 create workerbase-db-prod
+  // Copy the returned database_id into the env blocks below.
+  //
+  // Create remote R2 buckets:
+  //   npx wrangler r2 bucket create workerbase-storage-preprod
+  //   npx wrangler r2 bucket create workerbase-storage-prod
+  //
+  // Apply migrations:
+  //   npx wrangler d1 migrations apply workerbase-db-preprod --remote
+  //   npx wrangler d1 migrations apply workerbase-db-prod    --remote
+
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "workerbase",
   "main": "backend/src/index.ts",
   "compatibility_date": "2025-01-15",
   "compatibility_flags": ["nodejs_compat"],
 
-  // D1 — primary metadata store + dynamic tenant tables.
+  // Shared D1 config — per-env overrides set the actual database_id.
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "workerbase-db",
-      "database_id": "REPLACE_WITH_D1_ID",
+      "database_id": "local",
       "migrations_dir": "backend/migrations"
     }
   ],
 
-  // R2 — blob/file storage.
+  // Shared R2 config — per-env overrides set the actual bucket_name.
   "r2_buckets": [
     {
       "binding": "STORAGE",
@@ -43,5 +62,85 @@
 
   "observability": {
     "enabled": true
+  },
+
+  // ─── Environments ──────────────────────────────────────────────────
+  "env": {
+    // ── Local development ──
+    // D1 + R2 live in .wrangler/state/ — no remote credentials needed.
+    // Run: npx wrangler dev --env local
+    "local": {
+      "name": "workerbase-local",
+      "vars": {
+        "ENVIRONMENT": "local"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "workerbase-db-local",
+          "database_id": "local",
+          "migrations_dir": "backend/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "STORAGE",
+          "bucket_name": "workerbase-storage-local"
+        }
+      ]
+    },
+
+    // ── Pre-production ──
+    // Separate D1 database + R2 bucket for staging.
+    // Run: npx wrangler deploy --env preprod
+    "preprod": {
+      "name": "workerbase-preprod",
+      "vars": {
+        "ENVIRONMENT": "preprod"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "workerbase-db-preprod",
+          "database_id": "REPLACE_WITH_PREPROD_D1_ID",
+          "migrations_dir": "backend/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "STORAGE",
+          "bucket_name": "workerbase-storage-preprod"
+        }
+      ],
+      "observability": {
+        "enabled": true
+      }
+    },
+
+    // ── Production ──
+    // Run: npx wrangler deploy --env prod
+    "prod": {
+      "name": "workerbase-prod",
+      "vars": {
+        "ENVIRONMENT": "prod"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "workerbase-db-prod",
+          "database_id": "REPLACE_WITH_PROD_D1_ID",
+          "migrations_dir": "backend/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "STORAGE",
+          "bucket_name": "workerbase-storage-prod"
+        }
+      ],
+      "observability": {
+        "enabled": true
+      }
+    }
   }
 }
