@@ -23,6 +23,7 @@ import {
   type FieldType,
 } from "@/lib/fieldTypes";
 import type { CollectionType } from "@/lib/mockData";
+import { collectionNameSchema } from "@/lib/validation";
 
 /* ─── Types ──────────────────────────────────────────────────────── */
 interface FieldOpts {

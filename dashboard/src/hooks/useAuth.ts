@@ -1,24 +1,44 @@
 import { useCallback, useEffect, useState } from "react";
-import { getCurrentUser, logout as clearSession, type SessionUser } from "@/lib/dummyAuth";
+import { apiGetMe } from "@/lib/api-superusers";
+import { getToken, clearToken } from "@/lib/api-client";
+import type { Superuser } from "@/lib/api-types";
+
+/** Extended user type with role for UI compatibility. */
+export interface AuthUser extends Superuser {
+  role: "superuser" | "operator";
+}
 
 interface UseAuth {
-  user: SessionUser | null;
+  user: AuthUser | null;
   loading: boolean;
-  setUser: (user: SessionUser | null) => void;
+  setUser: (user: AuthUser | null) => void;
   logout: () => void;
 }
 
+/**
+ * Auth hook backed by the real API.
+ * On mount, validates any stored token via GET /api/core/superusers/me.
+ */
 export function useAuth(): UseAuth {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setUser(getCurrentUser());
-    setLoading(false);
+    if (!getToken()) {
+      setLoading(false);
+      return;
+    }
+    apiGetMe()
+      .then((res) => setUser({ ...res.user, role: "superuser" as const }))
+      .catch(() => {
+        clearToken();
+        setUser(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   const logout = useCallback(() => {
-    clearSession();
+    clearToken();
     setUser(null);
   }, []);
 

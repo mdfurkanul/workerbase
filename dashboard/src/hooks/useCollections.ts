@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Collection, CollectionsResponse } from "@/lib/mockData";
+import type { Collection } from "@/lib/mockData";
 import { applyOverrides } from "@/lib/collectionStore";
+import { apiListCollections } from "@/lib/api-collections";
+import { apiClient } from "@/lib/api-client";
 
 interface UseCollections {
   collections: Collection[];
@@ -9,12 +11,7 @@ interface UseCollections {
   refresh: () => Promise<void>;
 }
 
-/**
- * Fetch the collections index. Defaults to the bundled dummy JSON; when the
- * real backend is ready, set `VITE_COLLECTIONS_URL=/api/collections` (or a
- * full URL) and the same shape is consumed.
- */
-const ENDPOINT = import.meta.env.VITE_COLLECTIONS_URL ?? "/mock/collections.json";
+const MOCK_ENDPOINT = "/mock/collections.json";
 
 export function useCollections(): UseCollections {
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -25,18 +22,24 @@ export function useCollections(): UseCollections {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(ENDPOINT, { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as CollectionsResponse;
-      const list = Array.isArray(data?.collections) ? data.collections : [];
-      // Apply localStorage-backed overrides (deletes + edited schemas).
-      const merged = applyOverrides(list);
-      // Surface names alphabetically for a stable sidebar.
+      // Try the real API first.
+      const res = await apiListCollections();
+      const list = Array.isArray(res.collections) ? res.collections : [];
+      const merged = applyOverrides(list as unknown as Collection[]);
       merged.sort((a, b) => a.name.localeCompare(b.name));
       setCollections(merged);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setCollections([]);
+    } catch {
+      // Fall back to the mock JSON (so the dashboard still works without a backend).
+      try {
+        const data = await apiClient.get<{ collections: Collection[] }>(MOCK_ENDPOINT);
+        const list = Array.isArray(data?.collections) ? data.collections : [];
+        const merged = applyOverrides(list);
+        merged.sort((a, b) => a.name.localeCompare(b.name));
+        setCollections(merged);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setCollections([]);
+      }
     } finally {
       setLoading(false);
     }

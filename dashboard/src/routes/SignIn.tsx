@@ -2,22 +2,49 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AuthLayout from "@/components/AuthLayout";
 import Field from "@/components/Field";
-import { signIn } from "@/lib/dummyAuth";
+import { apiLogin } from "@/lib/api-superusers";
+import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/hooks/useAuth";
+import { useFormValidation } from "@/hooks/useFormValidation";
+import { loginSchema } from "@/lib/validation";
+
+type LoginForm = { email: string; password: string };
 
 export default function SignIn() {
   const navigate = useNavigate();
   const { setUser } = useAuth();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const {
+    values,
+    errors,
+    touched,
+    setValue,
+    onBlur,
+    validateAll,
+  } = useFormValidation<LoginForm>(loginSchema, { email: "", password: "" });
+
+  const isValid = Object.keys(errors).length === 0 && touched.email && touched.password;
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setApiError(null);
+    if (!validateAll()) return;
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 500));
-    setUser(signIn(email, password));
-    navigate("/");
+    try {
+      const res = await apiLogin(values.email, values.password);
+      setUser({ ...res.user, role: "superuser" as const });
+      navigate("/");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setApiError(err.status === 401 ? "Invalid email or password." : err.message);
+      } else {
+        setApiError("Network error. Is the backend running on :8787?");
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -42,8 +69,10 @@ export default function SignIn() {
           autoComplete="email"
           required
           placeholder="you@domain.com"
-          value={email}
-          onChange={setEmail}
+          value={values.email}
+          onChange={(v) => setValue("email", v)}
+          onBlur={() => onBlur("email")}
+          error={touched.email ? errors.email : undefined}
         />
         <Field
           label="Password"
@@ -51,10 +80,21 @@ export default function SignIn() {
           autoComplete="current-password"
           required
           placeholder="••••••••"
-          value={password}
-          onChange={setPassword}
+          value={values.password}
+          onChange={(v) => setValue("password", v)}
+          onBlur={() => onBlur("password")}
+          error={touched.password ? errors.password : undefined}
         />
-        <button type="submit" disabled={busy} className="btn-primary w-full">
+        {apiError && (
+          <p className="text-err text-[12px] bg-err-bg border border-line-strong rounded px-3 py-2">
+            {apiError}
+          </p>
+        )}
+        <button
+          type="submit"
+          disabled={busy || !isValid}
+          className="btn-primary w-full"
+        >
           {busy ? "Signing in…" : "Sign in"}
         </button>
 

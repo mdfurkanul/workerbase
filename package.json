@@ -8,34 +8,26 @@
     "dashboard"
   ],
   "scripts": {
-    "dev:backend": "wrangler dev --env local",
-    "dev:dashboard": "npm run dev --workspace dashboard",
     "dev": "concurrently -n backend,dashboard -c blue,magenta \"npm:dev:backend\" \"npm:dev:dashboard\"",
-    "build:dashboard": "npm run build --workspace dashboard",
-    "build:backend": "npm run build --workspace backend",
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:dashboard": "npm run dev --workspace dashboard",
+
     "build": "npm run build:dashboard && npm run build:backend",
+    "build:backend": "npm run build --workspace backend",
+    "build:dashboard": "npm run build --workspace dashboard",
 
-    "migrate:local": "wrangler d1 migrations apply workerbase-db-local --local",
-    "migrate:preprod": "wrangler d1 migrations apply workerbase-db-preprod --remote --env preprod",
-    "migrate:prod": "wrangler d1 migrations apply workerbase-db-prod --remote --env prod",
+    "typecheck": "npm run typecheck --workspaces --if-present",
 
-    "db:create:preprod": "wrangler d1 create workerbase-db-preprod",
-    "db:create:prod": "wrangler d1 create workerbase-db-prod",
+    "test": "npm run test --workspace backend",
+    "test:watch": "npm run test:watch --workspace backend",
 
-    "bucket:create:preprod": "wrangler r2 bucket create workerbase-storage-preprod",
-    "bucket:create:prod": "wrangler r2 bucket create workerbase-storage-prod",
-
-    "secret:preprod": "wrangler secret put AUTH_SECRET --env preprod",
-    "secret:prod": "wrangler secret put AUTH_SECRET --env prod",
-
-    "deploy:preprod": "npm run build:dashboard && wrangler deploy --env preprod",
-    "deploy:prod": "npm run build:dashboard && wrangler deploy --env prod",
+    "deploy:preprod": "npm run build:dashboard && npm run deploy:preprod --workspace backend",
+    "deploy:prod": "npm run build:dashboard && npm run deploy:prod --workspace backend",
     "deploy": "npm run deploy:prod",
 
-    "tail:preprod": "wrangler tail workerbase-preprod",
-    "tail:prod": "wrangler tail workerbase-prod",
-
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "migrate:local": "npm run migrate:local --workspace backend",
+    "migrate:preprod": "npm run migrate:preprod --workspace backend",
+    "migrate:prod": "npm run migrate:prod --workspace backend"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",

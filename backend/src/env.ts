@@ -11,6 +11,8 @@ export interface Env {
   REALTIME: DurableObjectNamespace;
   /** HMAC secret used to sign/verify session tokens. Set in `.dev.vars`. */
   AUTH_SECRET: string;
+  /** Set by wrangler.jsonc `vars` — "local" | "preprod" | "prod". */
+  ENVIRONMENT?: string;
 }
 
 /** Hono context variable bag carrying the request Env + execution context. */

@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../env.js";
-import { hashPassword, signToken, verifyPassword, verifyToken } from "../auth/crypto.js";
-import { requireAuth } from "../auth/middleware.js";
+import type { Env } from "../../env.js";
+import { hashPassword, signToken, verifyPassword, verifyToken } from "../../auth/crypto.js";
+import { requireAuth } from "../../auth/middleware.js";
 
 /**
  * Auth router — `POST /api/auth/login`, `POST /api/auth/register`,

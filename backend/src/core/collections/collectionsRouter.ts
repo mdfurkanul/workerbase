@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../env.js";
-import type { CollectionField, CollectionType } from "../db/schema.js";
+import type { Env } from "../../env.js";
+import type { FieldDefinition, CollectionType } from "../../db/schema.js";
 
 /**
  * Dynamic collection router.
@@ -88,7 +88,7 @@ function assertIdentifier(name: string): void {
   }
 }
 
-function renderColumnDef(field: CollectionField): string {
+function renderColumnDef(field: FieldDefinition): string {
   assertIdentifier(field.name);
   const parts = [`"${field.name}"`, field.type];
   if (field.required) parts.push("NOT NULL");
@@ -106,13 +106,13 @@ function renderColumnDef(field: CollectionField): string {
 }
 
 /** Auth columns injected into every `type: "user"` collection. */
-const AUTH_COLUMNS: CollectionField[] = [
-  { name: "email", type: "text", required: true, unique: true },
-  { name: "password_hash", type: "text", required: true },
-  { name: "password_salt", type: "text", required: true },
+const AUTH_COLUMNS: FieldDefinition[] = [
+  { id: "_auth_email", name: "email", type: "text", required: true, unique: true, hidden: false, options: {}, system: true },
+  { id: "_auth_password_hash", name: "password_hash", type: "text", required: true, unique: false, hidden: true, options: {}, system: true },
+  { id: "_auth_password_salt", name: "password_salt", type: "text", required: true, unique: false, hidden: true, options: {}, system: true },
 ];
 
-function renderCreateTable(name: string, fields: CollectionField[]): string {
+function renderCreateTable(name: string, fields: FieldDefinition[]): string {
   assertIdentifier(name);
   const body = [
     '"id" TEXT PRIMARY KEY',
@@ -150,7 +150,7 @@ interface PersistedMeta {
   id: string;
   name: string;
   type: CollectionType;
-  schema: CollectionField[] | null;
+  schema: FieldDefinition[] | null;
   query: string | null;
   list_rule?: string | null;
   create_rule?: string | null;
@@ -211,7 +211,7 @@ collectionsRouter.post("/", async (c) => {
     };
   } else if (spec.type === "user") {
     const u: UserSpec = spec;
-    const extra = (u.schema ?? []) as CollectionField[];
+    const extra = (u.schema ?? []) as FieldDefinition[];
     // Strip any user-supplied columns that collide with the auth columns.
     const reserved = new Set(AUTH_COLUMNS.map((c) => c.name));
     const deduped = extra.filter((f) => !reserved.has(f.name));
@@ -228,12 +228,12 @@ collectionsRouter.post("/", async (c) => {
     };
   } else {
     const b: BaseSpec = spec;
-    ddl = renderCreateTable(b.name, b.schema as CollectionField[]);
+    ddl = renderCreateTable(b.name, b.schema as FieldDefinition[]);
     meta = {
       id,
       name: b.name,
       type: "base",
-      schema: b.schema as CollectionField[],
+      schema: b.schema as FieldDefinition[],
       query: null,
       list_rule: b.list_rule,
       create_rule: b.create_rule,

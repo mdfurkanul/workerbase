@@ -2,13 +2,19 @@ import { Copy } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 
 const ENDPOINTS = [
-  { method: "POST", path: "/api/auth/login", desc: "Email + password → session token" },
-  { method: "POST", path: "/api/auth/register", desc: "Superuser-provisioned account creation" },
-  { method: "GET", path: "/api/auth/me", desc: "Current authenticated user" },
-  { method: "POST", path: "/api/collections", desc: "Create a base / user / view collection" },
-  { method: "GET", path: "/api/collections", desc: "List all collections" },
-  { method: "GET", path: "/api/collections/:name", desc: "Collection metadata" },
-  { method: "GET", path: "/api/realtime/:collection", desc: "WebSocket upgrade — per-collection DO" },
+  { method: "POST", path: "/api/core/superusers/login", desc: "Superuser email + password → session token" },
+  { method: "GET", path: "/api/core/superusers/me", desc: "Current superuser" },
+  { method: "POST", path: "/api/core/superusers/list", desc: "List all superusers" },
+  { method: "POST", path: "/api/core/superusers/create", desc: "Create new superuser (superuser-only)" },
+  { method: "PATCH", path: "/api/core/superusers/:id/email", desc: "Update superuser email" },
+  { method: "PATCH", path: "/api/core/superusers/:id/password", desc: "Change superuser password" },
+  { method: "POST", path: "/api/core/collections", desc: "Create a base / auth / view collection" },
+  { method: "GET", path: "/api/core/collections", desc: "List all collections" },
+  { method: "GET", path: "/api/core/collections/:name", desc: "Collection metadata" },
+  { method: "GET", path: "/api/core/sql/queries", desc: "List saved SQL queries" },
+  { method: "POST", path: "/api/core/sql/queries", desc: "Save a SQL query" },
+  { method: "DELETE", path: "/api/core/sql/queries/:id", desc: "Delete a saved query" },
+  { method: "GET", path: "/api/core/realtime/:collection", desc: "WebSocket upgrade — per-collection DO" },
 ];
 
 export default function ApiPreview() {
@@ -51,7 +57,7 @@ export default function ApiPreview() {
         <div>
           <span className="label-mono">Example — create collection</span>
           <pre className="mt-2 bg-surface border border-line rounded p-4 text-[12px] font-mono overflow-x-auto text-ink">
-{`curl -X POST ${base}/api/collections \\
+{`curl -X POST ${base}/api/core/collections \\
   -H "Content-Type: application/json" \\
   -d '{
     "type": "base",

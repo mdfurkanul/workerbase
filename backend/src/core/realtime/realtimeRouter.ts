@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Env } from "../env.js";
+import type { Env } from "../../env.js";
 
 /**
  * Realtime router — `GET /api/realtime/:collection` upgrades to a WebSocket

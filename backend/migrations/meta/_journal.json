@@ -15,6 +15,20 @@
       "when": 1734864000000,
       "tag": "0001_users",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": 6,
+      "when": 1734950400000,
+      "tag": "0002_system_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": 6,
+      "when": 1735036800000,
+      "tag": "0003_sql_queries",
+      "breakpoints": true
     }
   ]
 }

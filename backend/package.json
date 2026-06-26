@@ -7,12 +7,24 @@
   "scripts": {
     "dev": "wrangler dev --env local",
     "build": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply workerbase-db-local --local --env local",
+    "migrate:preprod": "wrangler d1 migrations apply workerbase-db-preprod --remote --env preprod",
+    "migrate:prod": "wrangler d1 migrations apply workerbase-db-prod --remote --env prod",
+    "db:create:preprod": "wrangler d1 create workerbase-db-preprod",
+    "db:create:prod": "wrangler d1 create workerbase-db-prod",
+    "bucket:create:preprod": "wrangler r2 bucket create workerbase-storage-preprod",
+    "bucket:create:prod": "wrangler r2 bucket create workerbase-storage-prod",
+    "secret:preprod": "wrangler secret put AUTH_SECRET --env preprod",
+    "secret:prod": "wrangler secret put AUTH_SECRET --env prod",
     "deploy:preprod": "wrangler deploy --env preprod",
     "deploy:prod": "wrangler deploy --env prod",
     "deploy": "wrangler deploy --env prod",
-    "typecheck": "tsc --noEmit",
-    "generate": "drizzle-kit generate",
-    "migrate": "drangler-kit migrate"
+    "tail:preprod": "wrangler tail workerbase-preprod",
+    "tail:prod": "wrangler tail workerbase-prod",
+    "generate": "drizzle-kit generate"
   },
   "dependencies": {
     "drizzle-orm": "^0.36.4",
@@ -20,11 +32,13 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.20",
     "@cloudflare/workers-types": "^4.20250115.0",
     "@hono/vite-dev-server": "^0.16.0",
     "drizzle-kit": "^0.30.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
+    "vitest": "^4.1.9",
     "wrangler": "^3.99.0"
   }
 }

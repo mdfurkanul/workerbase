@@ -1,30 +1,44 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import AuthLayout from "@/components/AuthLayout";
 import Field from "@/components/Field";
-import { completeMagicLogin } from "@/lib/dummyAuth";
-import { useAuth } from "@/hooks/useAuth";
+import { apiMagicRequest } from "@/lib/api-superusers";
+import { ApiError } from "@/lib/api-client";
+import { useFormValidation } from "@/hooks/useFormValidation";
+import { loginSchema } from "@/lib/validation";
 
 type Stage = "request" | "sent";
+type EmailForm = { email: string; password: string };
 
 export default function MagicLogin() {
-  const navigate = useNavigate();
-  const { setUser } = useAuth();
-  const [email, setEmail] = useState("");
   const [stage, setStage] = useState<Stage>("request");
   const [busy, setBusy] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const {
+    values,
+    errors,
+    touched,
+    setValue,
+    onBlur,
+    validateAll,
+  } = useFormValidation<EmailForm>(loginSchema, { email: "", password: "" });
+
+  const emailValid = !errors.email && touched.email;
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setApiError(null);
+    if (!validateAll()) return;
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 500));
-    setBusy(false);
-    setStage("sent");
-  }
-
-  function enterNow() {
-    setUser(completeMagicLogin(email));
-    navigate("/");
+    try {
+      await apiMagicRequest(values.email);
+      setStage("sent");
+    } catch (err) {
+      setApiError(err instanceof ApiError ? err.message : "Network error.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -45,11 +59,22 @@ export default function MagicLogin() {
             autoComplete="email"
             required
             placeholder="you@domain.com"
-            value={email}
-            onChange={setEmail}
-            hint="We’ll email a one-time link. Expires in 15 minutes."
+            value={values.email}
+            onChange={(v) => setValue("email", v)}
+            onBlur={() => onBlur("email")}
+            error={touched.email ? errors.email : undefined}
+            hint="We'll email a one-time link. Expires in 15 minutes."
           />
-          <button type="submit" disabled={busy} className="btn-primary w-full">
+          {apiError && (
+            <p className="text-err text-[12px] bg-err-bg border border-line-strong rounded px-3 py-2">
+              {apiError}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={busy || !emailValid}
+            className="btn-primary w-full"
+          >
             {busy ? "Sending…" : "Send magic link"}
           </button>
         </form>
@@ -57,11 +82,11 @@ export default function MagicLogin() {
         <div className="space-y-5">
           <p className="text-[14px] text-ink-muted">
             A signed link is on its way to{" "}
-            <span className="font-mono text-brand">{email}</span>.
+            <span className="font-mono text-brand">{values.email}</span>.
           </p>
-          <button onClick={enterNow} className="btn-primary w-full">
-            Enter workspace
-          </button>
+          <p className="text-[12px] text-ink-faint">
+            Check the backend console log (local dev only) for the link.
+          </p>
         </div>
       )}
     </AuthLayout>

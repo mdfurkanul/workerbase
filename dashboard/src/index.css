@@ -253,6 +253,9 @@
   .border-line { border-color: var(--line); }
   .border-line-strong { border-color: var(--line-strong); }
   .border-brand { border-color: var(--brand); }
+  .text-err { color: var(--err); }
+  .border-err { border-color: var(--err); }
+  .bg-err-bg { background: var(--err-bg); }
 
   .rise {
     animation: rise 500ms cubic-bezier(0.22, 1, 0.36, 1) both;

@@ -11,6 +11,8 @@ const PBKDF2_KEYLEN = 32; // 256-bit hash
 const SALT_LEN = 16;
 export const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
+const MIN_SECRET_LENGTH = 32;
+
 // ---------- base64url helpers ----------
 export function bytesToBase64url(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -113,6 +115,9 @@ export interface TokenPayload {
 }
 
 export async function signToken(payload: Omit<TokenPayload, "iat" | "exp">, secret: string): Promise<string> {
+  if (!secret || secret.length < MIN_SECRET_LENGTH) {
+    throw new Error("AUTH_SECRET must be at least 32 characters");
+  }
   const now = Math.floor(Date.now() / 1000);
   const full: TokenPayload = {
     ...payload,
@@ -131,9 +136,21 @@ export async function signToken(payload: Omit<TokenPayload, "iat" | "exp">, secr
 }
 
 export async function verifyToken(token: string, secret: string): Promise<TokenPayload | null> {
+  if (!secret || secret.length < MIN_SECRET_LENGTH) return null;
+
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
+
+  // ── FIX: validate JWT header — reject `alg:none` or alg swaps ──
+  let header: { alg?: string; typ?: string };
+  try {
+    header = JSON.parse(base64urlToString(headerB64));
+  } catch {
+    return null;
+  }
+  if (header.alg !== "HS256") return null;
+
   const signingInput = `${headerB64}.${payloadB64}`;
 
   let sigBytes: Uint8Array;
@@ -163,5 +180,17 @@ export async function verifyToken(token: string, secret: string): Promise<TokenP
   if (typeof payload.exp !== "number" || payload.exp < Math.floor(Date.now() / 1000)) {
     return null;
   }
+  if (typeof payload.sub !== "string" || payload.sub.length === 0) return null;
+
   return payload;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Token hashing — for storing opaque tokens (reset/magic/otp)
+//  in the _tokens table as SHA-256 hashes, not plaintext.
+// ─────────────────────────────────────────────────────────────
+
+export async function hashTokenValue(raw: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  return hexFromBuffer(buf);
 }
