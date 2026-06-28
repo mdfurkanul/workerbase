@@ -40,6 +40,8 @@ export function useAuth(): UseAuth {
   const logout = useCallback(() => {
     clearToken();
     setUser(null);
+    // Force a full page load so every useAuth instance resets.
+    window.location.href = "/login";
   }, []);
 
   return { user, loading, setUser, logout };

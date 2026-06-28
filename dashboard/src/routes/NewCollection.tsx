@@ -221,11 +221,64 @@ export default function NewCollection() {
   }
 
   /* ─── Submit ────────────────────────────────────────────────────── */
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    navigate(
-      name ? `/collections?collections=${encodeURIComponent(name)}` : "/collections",
-    );
+    setSubmitError(null);
+
+    // Build the payload matching the backend's expected shape.
+    const payload: Record<string, unknown> = {
+      name,
+      type,
+      listRule: perms.list ?? "authenticated",
+      viewRule: perms.view ?? "authenticated",
+      createRule: perms.write ?? "superuser",
+      updateRule: perms.write ?? "superuser",
+      deleteRule: perms.delete ?? "superuser",
+    };
+
+    if (type === "view") {
+      payload.query = viewQuery;
+    } else {
+      // Map the internal Field type to the backend's FieldDefinition shape.
+      payload.schema = fields
+        .filter((f) => f.name)
+        .map((f) => ({
+          id: f.cid,
+          name: f.name,
+          type: f.type,
+          required: f.required,
+          unique: f.unique,
+          hidden: f.hidden,
+          options: f.options,
+          ...(f.defaultValue ? { default: f.defaultValue } : {}),
+        }));
+      payload.indexes = indexes.map((i) => ({
+        name: i.name,
+        columns: i.columns,
+        unique: i.unique,
+      }));
+      payload.constraints = constraints.map((c) => ({ columns: c.columns }));
+    }
+
+    if (type === "user") {
+      payload.authConfig = authSettings;
+      payload.emailTemplates = emailTemplates;
+    }
+
+    setSubmitting(true);
+    try {
+      const { apiClient } = await import("@/lib/api-client");
+      await apiClient.post(`/api/core/collections`, payload);
+      navigate(name ? `/collections?collections=${encodeURIComponent(name)}` : "/collections");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to create collection";
+      setSubmitError(msg);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const editableFields = fields.filter((f) => !f.locked);
@@ -469,12 +522,18 @@ export default function NewCollection() {
             <RulesEditor perms={perms} onChange={setPerms} collectionType={type} />
           )}
 
+          {submitError && (
+            <div className="px-3 py-2 rounded bg-err-bg text-err text-[12px] font-mono border border-line-strong">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex items-center justify-between pt-4 hairline-t">
             <Link to="/collections" className="btn-ghost">
               ← Cancel
             </Link>
-            <button type="submit" className="btn-primary">
-              <Plus size={14} /> Create {collectionTypeMeta(type).label.replace(" Collection", "")}
+            <button type="submit" disabled={submitting} className="btn-primary">
+              {submitting ? "Creating…" : (<><Plus size={14} /> Create {collectionTypeMeta(type).label.replace(" Collection", "")}</>)}
             </button>
           </div>
         </form>

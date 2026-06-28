@@ -646,10 +646,11 @@ superuserAuthRouter.delete("/:id", requireAuth, async (c) => {
 // ─────────────────────────────────────────────────────────────
 
 superuserAuthRouter.post("/bootstrap", async (c) => {
-  // Read the body FIRST — in Workers, the stream can be lost after an await.
+  // Read body as text then parse — avoids stream issues in Wrangler local dev.
   let body: unknown;
   try {
-    body = await c.req.json();
+    const raw = await c.req.text();
+    body = raw ? JSON.parse(raw) : {};
   } catch {
     return c.json({ error: "invalid_json" }, 400);
   }

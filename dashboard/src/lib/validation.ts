@@ -48,15 +48,15 @@ export type ValidationErrors<T> = Partial<Record<keyof T, string>>;
 
 /**
  * Validate a single field from a Zod object schema.
- * Returns `undefined` when valid, or the first error message for the field.
+ * `data` is the full form values object — we run the full schema and
+ * return only the first error (if any) for the specified `field`.
  */
 export function validateField<T>(
   schema: z.ZodSchema<T>,
   field: keyof T,
-  value: unknown,
+  data: unknown,
 ): string | undefined {
-  const partial = { [field]: value } as Partial<T>;
-  const result = schema.safeParse(partial);
+  const result = schema.safeParse(data);
   if (result.success) return undefined;
   const issue = result.error.issues.find((i) => i.path[0] === field);
   return issue?.message;

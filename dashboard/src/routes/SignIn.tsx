@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AuthLayout from "@/components/AuthLayout";
 import Field from "@/components/Field";
@@ -23,9 +23,16 @@ export default function SignIn() {
     setValue,
     onBlur,
     validateAll,
-  } = useFormValidation<LoginForm>(loginSchema, { email: "", password: "" });
+  } = useFormValidation<LoginForm>(loginSchema, { email: "admin@workerbase.dev", password: "Password123" });
 
-  const isValid = Object.keys(errors).length === 0 && touched.email && touched.password;
+  const isValid = Object.values(errors).every((e) => !e) && touched.email && touched.password;
+
+  // Auto-mark fields as touched on mount (dev convenience with prefilled values).
+  useEffect(() => {
+    onBlur("email");
+    onBlur("password");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();

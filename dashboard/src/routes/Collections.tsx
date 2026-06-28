@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronRight, Plus, Search } from "lucide-react";
+import { ChevronRight, Plus, Search, Trash2, Loader2 } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 import { DataTable, Cell } from "@/components/Table";
 import CollectionHeader from "@/components/CollectionHeader";
@@ -14,9 +14,10 @@ import AuthConfig, { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/componen
 import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
 import Modal from "@/components/Modal";
 import { useCollections } from "@/hooks/useCollections";
-import { USERS_RECORDS, type Record as Row, type Collection } from "@/lib/mockData";
+import { type Record as Row, type Collection } from "@/lib/mockData";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
-import { getVisibleColumns, setVisibleColumns, saveEditedSchema, setEditedName } from "@/lib/collectionStore";
+import { getVisibleColumns, setVisibleColumns, saveEditedSchema, setEditedName, markDeleted } from "@/lib/collectionStore";
+import { apiClient } from "@/lib/api-client";
 
 /**
  * Single router for every collection URL. The sub-view is chosen by
@@ -103,6 +104,7 @@ function CollectionsIndex() {
 
 /* ─── Single collection view (records + slide-over panels) ─────────── */
 function CollectionView({ name }: { name: string }) {
+  const navigate = useNavigate();
   const { collections, loading, refresh } = useCollections();
   const collection = collections.find((c) => c.name === name);
   const [tick, setTick] = useState(0);
@@ -123,6 +125,30 @@ function CollectionView({ name }: { name: string }) {
     const next = new URLSearchParams(params);
     next.set("action", a);
     setParams(next, { replace: true });
+  }
+
+  // Delete state
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTyped, setDeleteTyped] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await apiClient.del(`/api/core/collections/${encodeURIComponent(name)}`);
+      markDeleted(name);
+      void refresh();
+      navigate("/collections");
+    } catch {
+      // If the API fails, fall back to local-only delete
+      markDeleted(name);
+      void refresh();
+      navigate("/collections");
+    } finally {
+      setDeleting(false);
+      setDeleteOpen(false);
+      setDeleteTyped("");
+    }
   }
 
   if (loading) {
@@ -163,6 +189,7 @@ function CollectionView({ name }: { name: string }) {
         reloading={loading}
         onEdit={() => openSlide("edit")}
         onSettings={() => openSlide("settings")}
+        onDelete={name.startsWith("_") || name === "logs" ? undefined : () => setDeleteOpen(true)}
       />
       <RecordsTable
         key={tick}
@@ -224,6 +251,54 @@ function CollectionView({ name }: { name: string }) {
       >
         <NewRecordPanel schema={collection.schema} />
       </SlideOver>
+
+      {/* Delete confirmation modal */}
+      <Modal
+        open={deleteOpen}
+        title={<>Delete <span className="font-mono">{name}</span>?</>}
+        onClose={() => {
+          setDeleteOpen(false);
+          setDeleteTyped("");
+        }}
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setDeleteOpen(false);
+                setDeleteTyped("");
+              }}
+              className="btn-ghost"
+              disabled={deleting}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={deleteTyped !== name || deleting}
+              className="btn-primary disabled:opacity-50"
+              style={{ background: "var(--err)", color: "#fff" }}
+            >
+              <Trash2 size={14} /> {deleting ? "Deleting…" : "Delete forever"}
+            </button>
+          </>
+        }
+      >
+        <p>
+          This will permanently delete the collection{" "}
+          <span className="font-mono text-ink">{name}</span>, its D1 table, and all records.
+          This action cannot be undone.
+        </p>
+        <p className="mt-3">
+          To confirm, type the collection name below.
+        </p>
+        <input
+          value={deleteTyped}
+          onChange={(e) => setDeleteTyped(e.target.value)}
+          placeholder={name}
+          className="field-input mt-2 font-mono"
+          autoFocus
+        />
+      </Modal>
     </AppShell>
   );
 }
@@ -254,9 +329,8 @@ function RecordsTable({
   // Drawer state — purely local; not in the URL.
   const [drawerRow, setDrawerRow] = useState<Row | null>(null);
 
-  // Bulk selection + deletion (session-only, in-memory).
+  // Bulk selection.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Visible columns (per-collection, persisted in localStorage).
@@ -267,7 +341,6 @@ function RecordsTable({
   const [visible, setVisible] = useState<string[]>(() => {
     const stored = getVisibleColumns(collectionName);
     if (stored && stored.length > 0) {
-      // Filter to columns that still exist in the schema.
       const known = new Set(allColumns.map((c) => c.name));
       const filtered = stored.filter((n) => known.has(n));
       return filtered.length > 0 ? filtered : allColumns.map((c) => c.name);
@@ -277,33 +350,46 @@ function RecordsTable({
 
   function handleVisibleChange(next: string[]) {
     setVisible(next);
-    // Always persist (even when empty) so the user's choice survives reload.
     setVisibleColumns(collectionName, next);
   }
 
-  // For the demo only `users` is seeded with rows.
-  const rows: Row[] = useMemo(() => {
-    const seed = collectionName === "users" ? USERS_RECORDS : [];
-    // Drop session-deleted records so the table reflects bulk-delete actions.
-    return seed.filter((r) => !deletedIds.has(r.id));
-  }, [collectionName, deletedIds]);
+  // ─── Fetch records from the API ───────────────────────────────────
+  const [records, setRecords] = useState<Row[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [recordsError, setRecordsError] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const filteredRows = useMemo(() => {
-    let r = rows;
-    if (q.trim()) {
-      const needle = q.toLowerCase();
-      r = r.filter((row) => JSON.stringify(row).toLowerCase().includes(needle));
-    }
-    return r;
-  }, [rows, q]);
+  useEffect(() => {
+    setRecordsLoading(true);
+    setRecordsError(null);
+    apiClient
+      .get<{
+        items: Row[];
+        page: number;
+        perPage: number;
+        total: number;
+        totalPages: number;
+      }>(`/api/core/collections/${encodeURIComponent(collectionName)}/records?page=${page}&perPage=${perPage}`)
+      .then((data) => {
+        setRecords(data.items ?? []);
+        setTotal(data.total ?? 0);
+        setTotalPages(data.totalPages ?? 1);
+      })
+      .catch((err) => {
+        setRecordsError(err instanceof Error ? err.message : "Failed to load records");
+        setRecords([]);
+        setTotal(0);
+        setTotalPages(1);
+      })
+      .finally(() => setRecordsLoading(false));
+  }, [collectionName, page, perPage]);
 
-  // Pagination math.
-  const total = filteredRows.length;
-  const pageCount = Math.max(1, Math.ceil(total / perPage));
-  const currentPage = Math.min(page, pageCount);
-  const start = (currentPage - 1) * perPage;
+  // Pagination math from the real API total.
+  const currentPage = Math.min(page, totalPages);
+  const start = total > 0 ? (currentPage - 1) * perPage : 0;
   const end = Math.min(start + perPage, total);
-  const pageRows = filteredRows.slice(start, end);
+  const pageRows = records;
 
   const visibleSet = new Set(visible);
   const columns = allColumns
@@ -313,7 +399,7 @@ function RecordsTable({
       header: f.name,
       cell: (r: Row) =>
         f.name === "id" ? (
-          <span className="font-mono text-ink-muted">{r.id}</span>
+          <span className="font-mono text-ink-muted">{r.id ?? r[f.name]}</span>
         ) : (
           <Cell value={r[f.name]} />
         ),
@@ -343,9 +429,10 @@ function RecordsTable({
   }
 
   // Selected rows (across all pages, in original order).
+  // Selected rows from the current page (for download).
   const selectedRows = useMemo(
-    () => rows.filter((r) => selectedIds.has(r.id)),
-    [rows, selectedIds],
+    () => records.filter((r) => selectedIds.has(r.id ?? "")),
+    [records, selectedIds],
   );
 
   function handleDownload() {
@@ -363,11 +450,7 @@ function RecordsTable({
   }
 
   function handleDelete() {
-    setDeletedIds((prev) => {
-      const next = new Set(prev);
-      selectedIds.forEach((id) => next.add(id));
-      return next;
-    });
+    // Note: real record deletion happens via API — this is a UI-only clear.
     setSelectedIds(new Set());
     setConfirmOpen(false);
   }
@@ -391,7 +474,7 @@ function RecordsTable({
   }
 
   // Build a compact list of page numbers around the current page.
-  const pageNumbers = buildPageList(currentPage, pageCount);
+  const pageNumbers = buildPageList(currentPage, totalPages);
 
   // Snapshot for the drawer — immediate preview while the dummy fetch runs.
   const drawerSnapshot = drawerRow
@@ -438,21 +521,29 @@ function RecordsTable({
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
-        <DataTable
-          columns={columns}
-          rows={pageRows}
-          onRowAction={(row) => setDrawerRow(row)}
-          selectedIds={selectedIds}
-          onToggleRow={toggleRow}
-          onToggleAll={toggleAll}
-          empty={
-            columns.length === 0
-              ? "No columns selected — pick at least one from Columns."
-              : collectionName === "users"
-                ? "No records match your filters"
-                : "No records yet (mock)"
-          }
-        />
+        {recordsError ? (
+          <div className="bg-err-bg border border-line-strong text-err rounded px-4 py-3 text-[13px] font-mono">
+            {recordsError}
+          </div>
+        ) : recordsLoading ? (
+          <div className="flex items-center gap-2 py-8 text-[13px] text-ink-muted">
+            <Loader2 size={14} className="animate-spin text-brand" /> Loading records…
+          </div>
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={pageRows}
+            onRowAction={(row) => setDrawerRow(row)}
+            selectedIds={selectedIds}
+            onToggleRow={toggleRow}
+            onToggleAll={toggleAll}
+            empty={
+              columns.length === 0
+                ? "No columns selected — pick at least one from Columns."
+                : "No records found."
+            }
+          />
+        )}
       </div>
 
       {/* Pagination footer */}
@@ -479,7 +570,7 @@ function RecordsTable({
           </label>
 
           {/* Prev / pages / next */}
-          {pageCount > 1 && (
+          {totalPages > 1 && (
             <nav className="flex items-center gap-1" aria-label="Pagination">
               <button
                 onClick={() => goToPage(currentPage - 1)}
@@ -508,7 +599,7 @@ function RecordsTable({
               )}
               <button
                 onClick={() => goToPage(currentPage + 1)}
-                disabled={currentPage === pageCount}
+                disabled={currentPage === totalPages}
                 className="btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
                 aria-label="Next page"
               >

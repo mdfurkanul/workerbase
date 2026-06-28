@@ -179,9 +179,16 @@ function Sidebar() {
     return collections.filter((c) => c.name.toLowerCase().includes(q));
   }, [collections, query]);
 
+  // Split into user collections (top) vs system tables (bottom group).
+  const SYSTEM_NAMES = new Set(SYSTEM_LINKS.map((s) => s.name));
+  const isSystemName = (name: string) => name.startsWith("_") || SYSTEM_NAMES.has(name) || name === "logs";
+
+  const userCollections = filtered.filter((c) => !isSystemName(c.name));
+  const systemCollections = filtered.filter((c) => isSystemName(c.name));
+
   const pinnedSet = new Set(pinned);
-  const pinnedList = filtered.filter((c) => pinnedSet.has(c.name));
-  const restList = filtered.filter((c) => !pinnedSet.has(c.name));
+  const pinnedList = userCollections.filter((c) => pinnedSet.has(c.name));
+  const restList = userCollections.filter((c) => !pinnedSet.has(c.name));
 
   function handleTogglePin(name: string) {
     setPinned(togglePinned(name));
@@ -230,7 +237,7 @@ function Sidebar() {
           <div className="px-2 py-3 text-[12px] text-err font-mono">
             failed to load: {error}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : userCollections.length === 0 && systemCollections.length === 0 ? (
           <div className="px-2 py-3 text-[12px] text-ink-faint">
             {query ? `No matches for "${query}".` : "No collections yet."}
           </div>
@@ -269,27 +276,29 @@ function Sidebar() {
         )}
       </nav>
 
-      {/* System — collapsible group */}
-      <div className="px-3 pt-4 pb-1">
-        <button
-          onClick={() => setSystemOpen((v) => !v)}
-          className="w-full flex items-center justify-between rounded hover:bg-surface-2 transition px-1 py-0.5 group"
-          aria-expanded={systemOpen}
-        >
-          <span className="label-mono inline-flex items-center gap-1.5">
-            {systemOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            System
-          </span>
-          <span className="label-mono text-ink-faint">{SYSTEM_LINKS.length}</span>
-        </button>
-      </div>
-      {systemOpen && (
+      {/* System — collapsible group (real system tables from the loaded list) */}
+      {systemCollections.length > 0 && (
+        <div className="px-3 pt-4 pb-1">
+          <button
+            onClick={() => setSystemOpen((v) => !v)}
+            className="w-full flex items-center justify-between rounded hover:bg-surface-2 transition px-1 py-0.5 group"
+            aria-expanded={systemOpen}
+          >
+            <span className="label-mono inline-flex items-center gap-1.5">
+              {systemOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+              System
+            </span>
+            <span className="label-mono text-ink-faint">{systemCollections.length}</span>
+          </button>
+        </div>
+      )}
+      {systemOpen && systemCollections.length > 0 && (
         <nav className="px-2 space-y-0.5 pb-3">
-          {SYSTEM_LINKS.map((s) => (
+          {systemCollections.map((c) => (
             <SidebarItem
-              key={s.name}
-              to={buildCollectionUrl(s.name)}
-              label={s.name}
+              key={c.id ?? c.name}
+              to={buildCollectionUrl(c.name)}
+              label={c.name}
               icon={<Shield size={13} />}
             />
           ))}

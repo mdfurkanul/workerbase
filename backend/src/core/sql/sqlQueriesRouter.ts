@@ -169,3 +169,61 @@ sqlQueriesRouter.delete("/queries/:id", requireAuth, async (c) => {
   // D1 doesn't expose affectedRows consistently; just return success.
   return c.json({ success: true });
 });
+
+/* ─────────────────────────────────────────────────────────────
+ * POST /api/sql/execute — run a read-only SELECT against D1.
+ * ───────────────────────────────────────────────────────────── */
+
+const executeSchema = z.object({
+  sql: z.string().min(1).max(8192),
+});
+
+function isSafeSelect(raw: string): boolean {
+  const q = raw.trim();
+  if (!q || q.includes(";")) return false;
+  if (!/^SELECT\b|^PRAGMA\b/i.test(q)) return false;
+  const forbidden = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|ATTACH|DETACH|REPLACE|GRANT|REVOKE|VACUUM|REINDEX)\b/i;
+  return !forbidden.test(q);
+}
+
+sqlQueriesRouter.post("/execute", requireAuth, async (c) => {
+  let body: unknown;
+  try {
+    const raw = await c.req.text();
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  const parsed = executeSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "validation_failed", issues: parsed.error.flatten() }, 400);
+  }
+
+  const sql = parsed.data.sql.trim();
+
+  if (!isSafeSelect(sql)) {
+    return c.json({ error: "unsafe_query", message: "Only read-only SELECT or PRAGMA statements are allowed." }, 400);
+  }
+
+  try {
+    const result = await c.env.DB.prepare(sql).all();
+
+    // Extract column names from the first row (D1 returns objects).
+    const rows = result.results ?? [];
+    let columns: string[] = [];
+    if (rows.length > 0) {
+      columns = Object.keys(rows[0] as Record<string, unknown>);
+    }
+
+    return c.json({
+      ok: true,
+      columns,
+      rows,
+      rowCount: rows.length,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ ok: false, error: msg }, 200);
+  }
+});

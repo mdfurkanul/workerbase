@@ -6,91 +6,112 @@ import type { FieldDefinition, CollectionType } from "../../db/schema.js";
 /**
  * Dynamic collection router.
  *
- * POST /api/collections
- *   Creates a new collection. Three modes are supported via `type`:
+ * POST /api/collections  — create a new collection (base / user / view)
+ * GET  /api/collections  — list all collections
+ * GET  /api/collections/:name — single collection metadata
  *
- *     base : a user-defined custom table built from `schema` fields.
- *            `schema` is required.
- *     user : an auth-purposed table. Auth columns (`email`, `password_hash`,
- *            `password_salt`) are auto-injected; any user-supplied fields in
- *            `schema` are appended (e.g. display_name, role).
- *     view : a virtual collection backed by a SELECT query. `query` is
- *            required; the collection is materialised via CREATE VIEW.
- *
- *   The `name` is always validated against a strict alphanumeric+underscore
- *   rule. Identifiers used in DDL are validated against the same regex; user
- *   values are never string-interpolated into SQL — only validated identifiers
- *   are, and bound parameters handle literals.
+ * The frontend sends a rich payload matching the SchemaEditor output.
+ * We accept the full field definition shape and store it as JSON.
  */
 
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
-const FIELD_TYPES = ["text", "integer", "real", "blob"] as const;
 
+/* ── Permissive field schema — accepts everything the editor sends ── */
 const fieldSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(IDENT, "invalid column name"),
-  type: z.enum(FIELD_TYPES),
-  required: z.boolean().optional(),
-  unique: z.boolean().optional(),
+  id: z.string().optional(),
+  name: z.string().min(1).max(64).regex(IDENT, "invalid column name"),
+  type: z.string(),  // accept all type strings (text, email, file, relation, geo, etc.)
+  required: z.boolean().optional().default(false),
+  unique: z.boolean().optional().default(false),
+  hidden: z.boolean().optional().default(false),
+  system: z.boolean().optional(),
+  auto: z.boolean().optional(),
+  primaryKey: z.boolean().optional(),
   default: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
+  options: z.record(z.unknown()).optional().default({}),
 });
 
-const baseSpec = z.object({
+/* ── Index + constraint schemas ── */
+const indexSchema = z.object({
+  name: z.string().min(1).max(128),
+  columns: z.array(z.string()),
+  unique: z.boolean().optional().default(false),
+});
+
+const constraintSchema = z.object({
+  name: z.string().optional(),
+  columns: z.array(z.string()),
+});
+
+/* ── Collection create payload — accepts camelCase (frontend) ── */
+const createBaseSchema = z.object({
   type: z.literal("base"),
-  name: z.string().min(1).max(64).regex(NAME_RE, "name must be alphanumeric (underscore allowed) and start with a letter"),
+  name: z.string().min(1).max(64).regex(NAME_RE),
   schema: z.array(fieldSchema).min(1),
-  list_rule: z.string().optional(),
-  create_rule: z.string().optional(),
+  indexes: z.array(indexSchema).optional(),
+  constraints: z.array(constraintSchema).optional(),
+  listRule: z.string().optional(),
+  viewRule: z.string().optional(),
+  createRule: z.string().optional(),
+  updateRule: z.string().optional(),
+  deleteRule: z.string().optional(),
 });
 
-const userSpec = z.object({
+const createUserSchema = z.object({
   type: z.literal("user"),
-  name: z.string().min(1).max(64).regex(NAME_RE, "name must be alphanumeric (underscore allowed) and start with a letter"),
-  // Auth columns are auto-injected; user may declare additional profile columns.
-  schema: z.array(fieldSchema).max(32).optional(),
-  list_rule: z.string().optional(),
-  create_rule: z.string().optional(),
+  name: z.string().min(1).max(64).regex(NAME_RE),
+  schema: z.array(fieldSchema).optional(),
+  indexes: z.array(indexSchema).optional(),
+  constraints: z.array(constraintSchema).optional(),
+  listRule: z.string().optional(),
+  viewRule: z.string().optional(),
+  createRule: z.string().optional(),
+  updateRule: z.string().optional(),
+  deleteRule: z.string().optional(),
+  authConfig: z.record(z.unknown()).optional(),
+  emailTemplates: z.record(z.unknown()).optional(),
 });
 
-const viewSpec = z.object({
+const createViewSchema = z.object({
   type: z.literal("view"),
-  name: z.string().min(1).max(64).regex(NAME_RE, "name must be alphanumeric (underscore allowed) and start with a letter"),
-  // The SELECT statement backing the view. Must be a single read-only query.
-  query: z
-    .string()
-    .min(1)
-    .max(8192)
-    .refine(
-      (q) => isSafeSelectQuery(q),
-      "query must be a single read-only SELECT statement (no semicolons, no DDL/DML)",
-    ),
-  list_rule: z.string().optional(),
-  create_rule: z.string().optional(),
+  name: z.string().min(1).max(64).regex(NAME_RE),
+  query: z.string().min(1).max(8192),
+  listRule: z.string().optional(),
+  viewRule: z.string().optional(),
 });
 
-const createCollectionSchema = z.discriminatedUnion("type", [baseSpec, userSpec, viewSpec]);
+const createCollectionSchema = z.discriminatedUnion("type", [
+  createBaseSchema,
+  createUserSchema,
+  createViewSchema,
+]);
 
-type BaseSpec = z.infer<typeof baseSpec>;
-type UserSpec = z.infer<typeof userSpec>;
-type ViewSpec = z.infer<typeof viewSpec>;
-
-export const collectionsRouter = new Hono<{ Bindings: Env }>();
-
-// ---------- helpers ----------
+/* ── Helpers ── */
 
 function assertIdentifier(name: string): void {
-  if (!IDENT.test(name)) {
-    throw new Error(`unsafe identifier: ${name}`);
-  }
+  if (!IDENT.test(name)) throw new Error(`unsafe identifier: ${name}`);
 }
 
-function renderColumnDef(field: FieldDefinition): string {
+/** Map a frontend field type to the SQLite column type used in DDL. */
+function sqliteType(type: string): string {
+  const map: Record<string, string> = {
+    text: "TEXT", editor: "TEXT", phone: "TEXT", url: "TEXT", email: "TEXT",
+    integer: "INTEGER", real: "REAL",
+    bool: "INTEGER",
+    date: "TEXT", datetime: "INTEGER",
+    file: "TEXT", files: "TEXT",
+    relation: "TEXT",
+    select: "TEXT",
+    json: "TEXT",
+    blob: "BLOB",
+  };
+  return map[type] ?? "TEXT";
+}
+
+function renderColumnDef(field: { name: string; type: string; required?: boolean; unique?: boolean; default?: string | number | boolean | null }): string {
   assertIdentifier(field.name);
-  const parts = [`"${field.name}"`, field.type];
+  const parts = [`"${field.name}"`, sqliteType(field.type)];
   if (field.required) parts.push("NOT NULL");
   if (field.unique) parts.push("UNIQUE");
   if (field.default !== undefined && field.default !== null) {
@@ -105,19 +126,22 @@ function renderColumnDef(field: FieldDefinition): string {
   return parts.join(" ");
 }
 
-/** Auth columns injected into every `type: "user"` collection. */
-const AUTH_COLUMNS: FieldDefinition[] = [
-  { id: "_auth_email", name: "email", type: "text", required: true, unique: true, hidden: false, options: {}, system: true },
-  { id: "_auth_password_hash", name: "password_hash", type: "text", required: true, unique: false, hidden: true, options: {}, system: true },
-  { id: "_auth_password_salt", name: "password_salt", type: "text", required: true, unique: false, hidden: true, options: {}, system: true },
+/** Auth columns auto-injected for type="user" collections. */
+const AUTH_COLUMNS = [
+  { name: "email", type: "text", required: true, unique: true },
+  { name: "password_hash", type: "text", required: true, unique: false },
+  { name: "password_salt", type: "text", required: true, unique: false },
+  { name: "token_key", type: "text", required: false, unique: false },
+  { name: "verified", type: "bool", required: false, unique: false },
 ];
 
-function renderCreateTable(name: string, fields: FieldDefinition[]): string {
+function renderCreateTable(name: string, fields: { name: string; type: string; required?: boolean; unique?: boolean; default?: string | number | boolean | null }[]): string {
   assertIdentifier(name);
   const body = [
     '"id" TEXT PRIMARY KEY',
     ...fields.map(renderColumnDef),
     '"created_at" INTEGER NOT NULL DEFAULT (unixepoch())',
+    '"updated_at" INTEGER NOT NULL DEFAULT (unixepoch())',
   ].join(", ");
   return `CREATE TABLE IF NOT EXISTS "${name}" (${body})`;
 }
@@ -127,62 +151,23 @@ function renderCreateView(name: string, query: string): string {
   return `CREATE VIEW IF NOT EXISTS "${name}" AS ${query}`;
 }
 
-/**
- * Validate that a user-supplied query is a single read-only SELECT.
- * Cheap-but-effective guardrails: no `;`, no DDL/DML keywords up front.
- */
 function isSafeSelectQuery(raw: string): boolean {
   const q = raw.trim();
-  if (!q) return false;
-  if (q.includes(";")) return false;
+  if (!q || q.includes(";")) return false;
   if (!/^SELECT\s+/i.test(q)) return false;
-  // Reject obvious write/dml/ddl keywords as leading or anywhere as a clause.
-  const forbidden =
-    /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|ATTACH|DETACH|PRAGMA|REPLACE|GRANT|REVOKE|VACUUM|REINDEX)\b/i;
+  const forbidden = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|ATTACH|DETACH|PRAGMA|REPLACE|GRANT|REVOKE|VACUUM|REINDEX)\b/i;
   return !forbidden.test(q);
 }
 
-function uuid(): string {
-  return crypto.randomUUID();
-}
+/* ── Router ── */
 
-interface PersistedMeta {
-  id: string;
-  name: string;
-  type: CollectionType;
-  schema: FieldDefinition[] | null;
-  query: string | null;
-  list_rule?: string | null;
-  create_rule?: string | null;
-}
-
-/** Persist the metadata row into `_collections`. Throws on UNIQUE collision. */
-async function persistMeta(
-  env: Env,
-  meta: PersistedMeta,
-): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO _collections (id, name, type, schema, query, list_rule, create_rule)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      meta.id,
-      meta.name,
-      meta.type,
-      meta.schema ? JSON.stringify(meta.schema) : null,
-      meta.query,
-      meta.list_rule ?? null,
-      meta.create_rule ?? null,
-    )
-    .run();
-}
-
-// ---------- POST /api/collections ----------
+export const collectionsRouter = new Hono<{ Bindings: Env }>();
 
 collectionsRouter.post("/", async (c) => {
   let body: unknown;
   try {
-    body = await c.req.json();
+    const raw = await c.req.text();
+    body = raw ? JSON.parse(raw) : {};
   } catch {
     return c.json({ error: "invalid JSON body" }, 400);
   }
@@ -193,56 +178,53 @@ collectionsRouter.post("/", async (c) => {
   }
 
   const spec = parsed.data;
-  const id = uuid();
+  const id = crypto.randomUUID();
+  const now = Date.now();
   let ddl: string;
-  let meta: PersistedMeta;
 
+  // Build the schema JSON for storage + the DDL for the physical table.
   if (spec.type === "view") {
-    const v: ViewSpec = spec;
-    ddl = renderCreateView(v.name, v.query);
-    meta = {
-      id,
-      name: v.name,
-      type: "view",
-      schema: null,
-      query: v.query,
-      list_rule: v.list_rule,
-      create_rule: v.create_rule,
-    };
-  } else if (spec.type === "user") {
-    const u: UserSpec = spec;
-    const extra = (u.schema ?? []) as FieldDefinition[];
-    // Strip any user-supplied columns that collide with the auth columns.
-    const reserved = new Set(AUTH_COLUMNS.map((c) => c.name));
-    const deduped = extra.filter((f) => !reserved.has(f.name));
-    const mergedSchema = [...AUTH_COLUMNS, ...deduped];
-    ddl = renderCreateTable(u.name, mergedSchema);
-    meta = {
-      id,
-      name: u.name,
-      type: "user",
-      schema: mergedSchema,
-      query: null,
-      list_rule: u.list_rule,
-      create_rule: u.create_rule,
-    };
+    ddl = renderCreateView(spec.name, spec.query);
   } else {
-    const b: BaseSpec = spec;
-    ddl = renderCreateTable(b.name, b.schema as FieldDefinition[]);
-    meta = {
-      id,
-      name: b.name,
-      type: "base",
-      schema: b.schema as FieldDefinition[],
-      query: null,
-      list_rule: b.list_rule,
-      create_rule: b.create_rule,
-    };
+    // For auth collections, prepend auth columns.
+    let allFields: { name: string; type: string; required?: boolean; unique?: boolean; default?: string | number | boolean | null }[] = [];
+    if (spec.type === "user") {
+      allFields = [...AUTH_COLUMNS];
+    }
+    // Add user-defined fields (excluding system fields like id, created, updated which are handled in DDL).
+    const userFields = (spec.schema ?? []).filter(
+      (f) => !["id", "created", "updated", "created_at", "updated_at"].includes(f.name),
+    );
+    allFields.push(...userFields.map((f) => ({ name: f.name, type: f.type, required: f.required, unique: f.unique, default: f.default })));
+    ddl = renderCreateTable(spec.name, allFields);
   }
 
   // 1. Persist metadata.
   try {
-    await persistMeta(c.env, meta);
+    const schemaJson = spec.type !== "view" ? JSON.stringify(spec.schema ?? []) : null;
+    const queryVal = spec.type === "view" ? spec.query : null;
+    const indexesJson = "indexes" in spec && spec.indexes ? JSON.stringify(spec.indexes) : null;
+    const constraintsJson = "constraints" in spec && spec.constraints ? JSON.stringify(spec.constraints) : null;
+    const authConfigJson = "authConfig" in spec && spec.authConfig ? JSON.stringify(spec.authConfig) : null;
+    const emailTemplatesJson = "emailTemplates" in spec && spec.emailTemplates ? JSON.stringify(spec.emailTemplates) : null;
+
+    await c.env.DB.prepare(
+      `INSERT INTO _collections
+        (id, name, type, schema, query, indexes, constraints,
+         list_rule, view_rule, create_rule, update_rule, delete_rule,
+         auth_config, email_templates, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      id, spec.name, spec.type, schemaJson, queryVal,
+      indexesJson, constraintsJson,
+      ("listRule" in spec ? spec.listRule : null) ?? null,
+      ("viewRule" in spec ? spec.viewRule : null) ?? null,
+      ("createRule" in spec ? spec.createRule : null) ?? null,
+      ("updateRule" in spec ? spec.updateRule : null) ?? null,
+      ("deleteRule" in spec ? spec.deleteRule : null) ?? null,
+      authConfigJson, emailTemplatesJson,
+      now, now,
+    ).run();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/UNIQUE/i.test(msg)) {
@@ -251,7 +233,7 @@ collectionsRouter.post("/", async (c) => {
     return c.json({ error: "metadata_persist_failed", detail: msg }, 500);
   }
 
-  // 2. Issue DDL (CREATE TABLE for base/user, CREATE VIEW for view).
+  // 2. Issue DDL.
   try {
     await c.env.DB.exec(ddl);
   } catch (err) {
@@ -259,45 +241,132 @@ collectionsRouter.post("/", async (c) => {
     return c.json({ error: "ddl_failed", detail: msg, ddl }, 500);
   }
 
-  // 3. Best-effort realtime broadcast — never block the response.
+  // 3. Create indexes if provided.
+  if (spec.type !== "view" && "indexes" in spec && spec.indexes) {
+    for (const idx of spec.indexes) {
+      if (idx.columns.length === 0) continue;
+      assertIdentifier(idx.name);
+      const cols = idx.columns.map((col) => `"${col}"`).join(", ");
+      const uniqueKw = idx.unique ? "UNIQUE " : "";
+      try {
+        await c.env.DB.exec(`${uniqueKw}INDEX IF NOT EXISTS "${idx.name}" ON "${spec.name}" (${cols})`);
+      } catch {
+        // Index creation failure is non-fatal.
+      }
+    }
+  }
+
+  // 4. Best-effort realtime broadcast.
   c.executionCtx.waitUntil(
     (async () => {
       try {
-        const stub = c.env.REALTIME.get(c.env.REALTIME.idFromName(meta.name));
-        await stub.fetch(
-          new Request("https://internal/broadcast", {
-            method: "POST",
-            body: JSON.stringify({ type: "collection_created", name: meta.name, collectionType: meta.type }),
-          }),
-        );
-      } catch {
-        // ignore — best effort
-      }
+        const stub = c.env.REALTIME.get(c.env.REALTIME.idFromName(spec.name));
+        await stub.fetch(new Request("https://internal/broadcast", {
+          method: "POST",
+          body: JSON.stringify({ type: "collection_created", name: spec.name }),
+        }));
+      } catch { /* ignore */ }
     })(),
   );
 
-  return c.json(meta, 201);
+  return c.json({ id, name: spec.name, type: spec.type, created_at: now }, 201);
 });
-
-// ---------- GET /api/collections ----------
 
 collectionsRouter.get("/", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT id, name, type, schema, query, list_rule, create_rule FROM _collections ORDER BY name`,
+    `SELECT id, name, type, schema, query, indexes, constraints,
+            list_rule, view_rule, create_rule, update_rule, delete_rule,
+            auth_config, email_templates, created_at, updated_at
+     FROM _collections ORDER BY name`,
   ).all();
   return c.json({ collections: results });
 });
 
 collectionsRouter.get("/:name", async (c) => {
   const name = c.req.param("name");
-  if (!NAME_RE.test(name)) {
+  if (!NAME_RE.test(name) && !name.startsWith("_")) {
     return c.json({ error: "invalid collection name" }, 400);
   }
   const row = await c.env.DB.prepare(
-    `SELECT id, name, type, schema, query, list_rule, create_rule FROM _collections WHERE name = ?`,
-  )
-    .bind(name)
-    .first();
+    `SELECT id, name, type, schema, query, indexes, constraints,
+            list_rule, view_rule, create_rule, update_rule, delete_rule,
+            auth_config, email_templates, created_at, updated_at
+     FROM _collections WHERE name = ?`,
+  ).bind(name).first();
   if (!row) return c.json({ error: "not found" }, 404);
   return c.json({ collection: row });
+});
+
+/* ── GET /api/collections/:name/records — paginated records ── */
+collectionsRouter.get("/:name/records", async (c) => {
+  const name = c.req.param("name");
+  // Allow both user collections and system tables (underscore prefix).
+  if (!NAME_RE.test(name) && !name.startsWith("_") && name !== "logs") {
+    return c.json({ error: "invalid collection name" }, 400);
+  }
+
+  const page = Math.max(1, parseInt(c.req.query("page") ?? "1", 10) || 1);
+  const perPage = Math.min(100, Math.max(1, parseInt(c.req.query("perPage") ?? "20", 10) || 20));
+  const offset = (page - 1) * perPage;
+
+  try {
+    // Get total count.
+    const countRow = await c.env.DB.prepare(
+      `SELECT COUNT(*) as total FROM "${name}"`,
+    ).first<{ total: number }>();
+    const total = countRow?.total ?? 0;
+
+    // Get the page of records.
+    const { results } = await c.env.DB.prepare(
+      `SELECT * FROM "${name}" ORDER BY rowid DESC LIMIT ? OFFSET ?`,
+    ).bind(perPage, offset).all();
+
+    return c.json({
+      items: results ?? [],
+      page,
+      perPage,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "query_failed", detail: msg }, 500);
+  }
+});
+
+/* ── DELETE /api/collections/:name — delete a collection ── */
+collectionsRouter.delete("/:name", async (c) => {
+  const name = c.req.param("name");
+
+  // Block deletion of system tables.
+  const SYSTEM_TABLE_NAMES = new Set(["_superusers", "_users", "_externalAuths", "_collections", "_settings", "_tokens", "_db_migrations", "_logs", "_sqlQueries", "logs"]);
+  if (SYSTEM_TABLE_NAMES.has(name) || name.startsWith("_")) {
+    return c.json({ error: "system_table_cannot_be_deleted", message: "System tables cannot be deleted." }, 403);
+  }
+
+  if (!NAME_RE.test(name)) {
+    return c.json({ error: "invalid collection name" }, 400);
+  }
+
+  // 1. Check the collection exists.
+  const row = await c.env.DB.prepare(
+    `SELECT id, type FROM _collections WHERE name = ?`,
+  ).bind(name).first<{ id: string; type: string }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  // 2. Drop the physical table (or view).
+  try {
+    if (row.type === "view") {
+      await c.env.DB.exec(`DROP VIEW IF EXISTS "${name}"`);
+    } else {
+      await c.env.DB.exec(`DROP TABLE IF EXISTS "${name}"`);
+    }
+  } catch {
+    // Non-fatal — the table might already be gone.
+  }
+
+  // 3. Delete the metadata row.
+  await c.env.DB.prepare(`DELETE FROM _collections WHERE id = ?`).bind(row.id).run();
+
+  return c.json({ success: true });
 });

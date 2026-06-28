@@ -1,4 +1,4 @@
-import { Pencil, RefreshCw, Settings as Gear } from "lucide-react";
+import { Pencil, RefreshCw, Settings as Gear, Trash2 } from "lucide-react";
 import TypeBadge from "@/components/TypeBadge";
 
 interface CollectionHeaderProps {
@@ -9,6 +9,7 @@ interface CollectionHeaderProps {
   reloading?: boolean;
   onEdit?: () => void;
   onSettings?: () => void;
+  onDelete?: () => void;
 }
 
 export default function CollectionHeader({
@@ -19,6 +20,7 @@ export default function CollectionHeader({
   reloading,
   onEdit,
   onSettings,
+  onDelete,
 }: CollectionHeaderProps) {
   return (
     <div className="px-6 py-4 hairline-b bg-bg-elev flex items-center justify-between gap-4 flex-wrap">
@@ -59,6 +61,15 @@ export default function CollectionHeader({
         >
           <Gear size={13} /> Settings
         </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            className="btn-ghost text-[12px] border-err text-err hover:bg-err-bg"
+            title="Delete collection"
+          >
+            <Trash2 size={13} /> Delete
+          </button>
+        )}
       </div>
     </div>
   );
