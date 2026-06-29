@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../../env.js";
 import type { FieldDefinition, CollectionType } from "../../db/schema.js";
+import { requireAuth, requireRole } from "../../auth/middleware.js";
 
 /**
  * Dynamic collection router.
@@ -163,7 +164,7 @@ function isSafeSelectQuery(raw: string): boolean {
 
 export const collectionsRouter = new Hono<{ Bindings: Env }>();
 
-collectionsRouter.post("/", async (c) => {
+collectionsRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
   let body: unknown;
   try {
     const raw = await c.req.text();
@@ -208,7 +209,7 @@ collectionsRouter.post("/", async (c) => {
     const authConfigJson = "authConfig" in spec && spec.authConfig ? JSON.stringify(spec.authConfig) : null;
     const emailTemplatesJson = "emailTemplates" in spec && spec.emailTemplates ? JSON.stringify(spec.emailTemplates) : null;
 
-    await c.env.DB.prepare(
+    await c.env.SYSTEM_DB.prepare(
       `INSERT INTO _collections
         (id, name, type, schema, query, indexes, constraints,
          list_rule, view_rule, create_rule, update_rule, delete_rule,
@@ -272,8 +273,8 @@ collectionsRouter.post("/", async (c) => {
   return c.json({ id, name: spec.name, type: spec.type, created_at: now }, 201);
 });
 
-collectionsRouter.get("/", async (c) => {
-  const { results } = await c.env.DB.prepare(
+collectionsRouter.get("/", requireAuth, async (c) => {
+  const { results } = await c.env.SYSTEM_DB.prepare(
     `SELECT id, name, type, schema, query, indexes, constraints,
             list_rule, view_rule, create_rule, update_rule, delete_rule,
             auth_config, email_templates, created_at, updated_at
@@ -282,12 +283,12 @@ collectionsRouter.get("/", async (c) => {
   return c.json({ collections: results });
 });
 
-collectionsRouter.get("/:name", async (c) => {
+collectionsRouter.get("/:name", requireAuth, async (c) => {
   const name = c.req.param("name");
   if (!NAME_RE.test(name) && !name.startsWith("_")) {
     return c.json({ error: "invalid collection name" }, 400);
   }
-  const row = await c.env.DB.prepare(
+  const row = await c.env.SYSTEM_DB.prepare(
     `SELECT id, name, type, schema, query, indexes, constraints,
             list_rule, view_rule, create_rule, update_rule, delete_rule,
             auth_config, email_templates, created_at, updated_at
@@ -298,7 +299,7 @@ collectionsRouter.get("/:name", async (c) => {
 });
 
 /* ── GET /api/collections/:name/records — paginated records ── */
-collectionsRouter.get("/:name/records", async (c) => {
+collectionsRouter.get("/:name/records", requireAuth, async (c) => {
   const name = c.req.param("name");
   // Allow both user collections and system tables (underscore prefix).
   if (!NAME_RE.test(name) && !name.startsWith("_") && name !== "logs") {
@@ -310,15 +311,22 @@ collectionsRouter.get("/:name/records", async (c) => {
   const offset = (page - 1) * perPage;
 
   try {
+    // Check if this is a view (views don't have rowid).
+    const typeRow = await c.env.SYSTEM_DB.prepare(
+      `SELECT type FROM _collections WHERE name = ?`,
+    ).bind(name).first<{ type: string }>();
+    const isView = typeRow?.type === "view";
+
     // Get total count.
     const countRow = await c.env.DB.prepare(
       `SELECT COUNT(*) as total FROM "${name}"`,
     ).first<{ total: number }>();
     const total = countRow?.total ?? 0;
 
-    // Get the page of records.
+    // Get the page of records — views don't have rowid so use a simple LIMIT/OFFSET.
+    const orderBy = isView ? "LIMIT ? OFFSET ?" : "ORDER BY rowid DESC LIMIT ? OFFSET ?";
     const { results } = await c.env.DB.prepare(
-      `SELECT * FROM "${name}" ORDER BY rowid DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM "${name}" ${orderBy}`,
     ).bind(perPage, offset).all();
 
     return c.json({
@@ -335,11 +343,11 @@ collectionsRouter.get("/:name/records", async (c) => {
 });
 
 /* ── DELETE /api/collections/:name — delete a collection ── */
-collectionsRouter.delete("/:name", async (c) => {
+collectionsRouter.delete("/:name", requireAuth, requireRole("admin"), async (c) => {
   const name = c.req.param("name");
 
   // Block deletion of system tables.
-  const SYSTEM_TABLE_NAMES = new Set(["_superusers", "_users", "_externalAuths", "_collections", "_settings", "_tokens", "_db_migrations", "_logs", "_sqlQueries", "logs"]);
+  const SYSTEM_TABLE_NAMES = new Set(["_superusers", "_externalAuths", "_collections", "_settings", "_tokens", "_db_migrations", "_logs", "_sqlQueries", "logs"]);
   if (SYSTEM_TABLE_NAMES.has(name) || name.startsWith("_")) {
     return c.json({ error: "system_table_cannot_be_deleted", message: "System tables cannot be deleted." }, 403);
   }
@@ -349,7 +357,7 @@ collectionsRouter.delete("/:name", async (c) => {
   }
 
   // 1. Check the collection exists.
-  const row = await c.env.DB.prepare(
+  const row = await c.env.SYSTEM_DB.prepare(
     `SELECT id, type FROM _collections WHERE name = ?`,
   ).bind(name).first<{ id: string; type: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
@@ -366,7 +374,124 @@ collectionsRouter.delete("/:name", async (c) => {
   }
 
   // 3. Delete the metadata row.
-  await c.env.DB.prepare(`DELETE FROM _collections WHERE id = ?`).bind(row.id).run();
+  await c.env.SYSTEM_DB.prepare(`DELETE FROM _collections WHERE id = ?`).bind(row.id).run();
 
   return c.json({ success: true });
+});
+
+/* ── POST /api/collections/:name/records — create a record ── */
+collectionsRouter.post("/:name/records", requireAuth, requireRole("admin", "editor"), async (c) => {
+  const name = c.req.param("name");
+  if (!NAME_RE.test(name) && !name.startsWith("_") && name !== "logs") {
+    return c.json({ error: "invalid collection name" }, 400);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const raw = await c.req.text();
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+
+  // Add system columns.
+  const data: Record<string, unknown> = { ...body, id, created_at: now, updated_at: now };
+
+  // Remove any attempt to set system columns from the client.
+  delete (data as Record<string, unknown>)["rowid"];
+
+  // Build INSERT.
+  const cols = Object.keys(data);
+  const placeholders = cols.map(() => "?").join(", ");
+  const colNames = cols.map((k) => `"${k}"`).join(", ");
+  const values = cols.map((k) => data[k]);
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO "${name}" (${colNames}) VALUES (${placeholders})`,
+    ).bind(...values).run();
+
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM "${name}" WHERE id = ?`,
+    ).bind(id).first();
+
+    return c.json({ record: row }, 201);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "insert_failed", detail: msg }, 500);
+  }
+});
+
+/* ── PATCH /api/collections/:name/records/:id — update a record ── */
+collectionsRouter.patch("/:name/records/:id", requireAuth, requireRole("admin", "editor"), async (c) => {
+  const name = c.req.param("name");
+  const recordId = c.req.param("id");
+  if (!NAME_RE.test(name) && !name.startsWith("_") && name !== "logs") {
+    return c.json({ error: "invalid collection name" }, 400);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const raw = await c.req.text();
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  // Remove protected columns.
+  delete body["id"];
+  delete body["created_at"];
+  delete body["rowid"];
+
+  body["updated_at"] = Math.floor(Date.now() / 1000);
+
+  const sets = Object.keys(body).map((k) => `"${k}" = ?`);
+  const values = Object.values(body);
+
+  if (sets.length === 0) {
+    return c.json({ error: "no_fields_to_update" }, 400);
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `UPDATE "${name}" SET ${sets.join(", ")} WHERE id = ?`,
+    ).bind(...values, recordId).run();
+
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM "${name}" WHERE id = ?`,
+    ).bind(recordId).first();
+
+    if (!row) return c.json({ error: "not_found" }, 404);
+    return c.json({ record: row });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "update_failed", detail: msg }, 500);
+  }
+});
+
+/* ── DELETE /api/collections/:name/records/:id — delete a record ── */
+collectionsRouter.delete("/:name/records/:id", requireAuth, requireRole("admin", "editor"), async (c) => {
+  const name = c.req.param("name");
+  const recordId = c.req.param("id");
+  if (!NAME_RE.test(name) && !name.startsWith("_") && name !== "logs") {
+    return c.json({ error: "invalid collection name" }, 400);
+  }
+
+  // Block deletion from system auth tables.
+  if (name === "_superusers") {
+    return c.json({ error: "cannot_delete_from_auth_table" }, 403);
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `DELETE FROM "${name}" WHERE id = ?`,
+    ).bind(recordId).run();
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "delete_failed", detail: msg }, 500);
+  }
 });

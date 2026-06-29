@@ -5,7 +5,7 @@ export default defineConfig({
     // Node 20+ has globalThis.crypto.subtle — no Workers pool needed
     // for pure unit tests of the crypto / template modules.
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["tests/**/*.test.ts"],
     globals: true,
   },
 });

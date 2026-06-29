@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Env } from "../env.js";
 import { verifyToken, type TokenPayload } from "./crypto.js";
+import type { SuperuserRole } from "../db/schema.js";
 
 export type AuthVars = { user: TokenPayload | null };
 
@@ -48,4 +49,30 @@ export function currentUser(
   c: Context<{ Bindings: Env; Variables: AuthVars }>,
 ): TokenPayload | null {
   return c.get("user");
+}
+
+/**
+ * Require that the authenticated user has one of `allowed` roles.
+ *
+ * Must run AFTER `requireAuth` (which sets `c.get("user")`). Returns 403
+ * `{ error: "insufficient_role" }` if the user's role is not permitted.
+ */
+export function requireRole(
+  ...allowed: SuperuserRole[]
+): MiddlewareHandler<{
+  Bindings: Env;
+  Variables: AuthVars;
+}> {
+  const allowedSet = new Set(allowed);
+  return async (c, next) => {
+    const user = c.get("user");
+    // requireAuth should already have run — defend against misuse.
+    if (!user) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!allowedSet.has(user.role)) {
+      return c.json({ error: "insufficient_role" }, 403);
+    }
+    await next();
+  };
 }

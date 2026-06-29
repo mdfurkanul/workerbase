@@ -3,7 +3,7 @@ import { Download, Trash2, X } from "lucide-react";
 interface Props {
   count: number;
   onClear: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   onDownload: () => void;
 }
 
@@ -34,13 +34,15 @@ export default function SelectionBar({ count, onClear, onDelete, onDownload }: P
           <Download size={13} /> Download JSON
         </button>
 
-        <button
-          onClick={onDelete}
-          className="btn-ghost text-[12px] border-err text-err hover:bg-err-bg"
-          title="Delete selected records"
-        >
-          <Trash2 size={13} /> Delete
-        </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            className="btn-ghost text-[12px] border-err text-err hover:bg-err-bg"
+            title="Delete selected records"
+          >
+            <Trash2 size={13} /> Delete
+          </button>
+        )}
 
         <button
           onClick={onClear}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderEmail } from "./index.js";
+import { renderEmail } from "../../src/emails/index.js";
 
 describe("email template rendering", () => {
   it("replaces {{variables}} in the verification template", () => {

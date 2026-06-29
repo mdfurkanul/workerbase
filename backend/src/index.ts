@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/cloudflare-workers";
 import type { Env } from "./env.js";
 import {
-  authRouter,
   superuserAuthRouter,
   collectionsRouter,
   sqlQueriesRouter,
@@ -27,14 +26,12 @@ app.use("*", async (c, next) => {
 /**
  * All system APIs live under /api/core/*.
  *
- *   /api/core/auth/*          — user auth (login, register, me)
  *   /api/core/superusers/*    — superuser auth + management
  *   /api/core/collections/*   — collection CRUD
  *   /api/core/sql/*           — saved SQL queries
  *   /api/core/realtime/*      — WebSocket upgrades
  */
 const core = new Hono<{ Bindings: Env }>();
-core.route("/auth", authRouter);
 core.route("/superusers", superuserAuthRouter);
 core.route("/collections", collectionsRouter);
 core.route("/sql", sqlQueriesRouter);

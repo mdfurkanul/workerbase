@@ -7,7 +7,7 @@ import {
   hashTokenValue,
   bytesToBase64url,
   base64urlToString,
-} from "./crypto.js";
+} from "../../src/auth/crypto.js";
 
 const TEST_SECRET = "a".repeat(64); // 64-char test secret
 
@@ -43,7 +43,7 @@ describe("password hashing", () => {
 /* ─── Session tokens (JWT) ───────────────────────────────────────── */
 describe("session tokens", () => {
   it("signs and verifies a token round-trip", async () => {
-    const token = await signToken({ sub: "usr_123", email: "test@example.com" }, TEST_SECRET);
+    const token = await signToken({ sub: "usr_123", email: "test@example.com", role: "admin" }, TEST_SECRET);
     const payload = await verifyToken(token, TEST_SECRET);
     expect(payload).not.toBeNull();
     expect(payload!.sub).toBe("usr_123");
@@ -52,13 +52,13 @@ describe("session tokens", () => {
   });
 
   it("rejects a token signed with a different secret", async () => {
-    const token = await signToken({ sub: "usr_123", email: "test@example.com" }, TEST_SECRET);
+    const token = await signToken({ sub: "usr_123", email: "test@example.com", role: "admin" }, TEST_SECRET);
     const payload = await verifyToken(token, "b".repeat(64));
     expect(payload).toBeNull();
   });
 
   it("rejects a tampered token", async () => {
-    const token = await signToken({ sub: "usr_123", email: "test@example.com" }, TEST_SECRET);
+    const token = await signToken({ sub: "usr_123", email: "test@example.com", role: "admin" }, TEST_SECRET);
     // Flip a character in the payload portion.
     const parts = token.split(".");
     const tampered = `${parts[0]}.${parts[1]!.slice(0, -2)}XX.${parts[2]}`;
@@ -99,17 +99,17 @@ describe("session tokens", () => {
 /* ── Security fix #3: AUTH_SECRET validation ── */
 describe("AUTH_SECRET validation", () => {
   it("refuses to sign a token with a short secret", async () => {
-    await expect(signToken({ sub: "x", email: "x@x.com" }, "short")).rejects.toThrow(
+    await expect(signToken({ sub: "x", email: "x@x.com", role: "admin" }, "short")).rejects.toThrow(
       "AUTH_SECRET must be at least 32 characters",
     );
   });
 
   it("refuses to sign a token with an empty secret", async () => {
-    await expect(signToken({ sub: "x", email: "x@x.com" }, "")).rejects.toThrow();
+    await expect(signToken({ sub: "x", email: "x@x.com", role: "admin" }, "")).rejects.toThrow();
   });
 
   it("refuses to verify a token with a short secret", async () => {
-    const token = await signToken({ sub: "x", email: "x@x.com" }, TEST_SECRET);
+    const token = await signToken({ sub: "x", email: "x@x.com", role: "admin" }, TEST_SECRET);
     const result = await verifyToken(token, "short");
     expect(result).toBeNull();
   });

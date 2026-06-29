@@ -45,22 +45,24 @@ export default function CollectionHeader({
         >
           <RefreshCw size={15} className={reloading ? "animate-spin" : ""} />
         </button>
-        <button
-          onClick={onEdit}
-          disabled={!onEdit}
-          className="btn-ghost text-[12px]"
-          title="Edit collection schema"
-        >
-          <Pencil size={13} /> Edit
-        </button>
-        <button
-          onClick={onSettings}
-          disabled={!onSettings}
-          className="btn-ghost text-[12px]"
-          title="Collection settings & permissions"
-        >
-          <Gear size={13} /> Settings
-        </button>
+        {onEdit && (
+          <button
+            onClick={onEdit}
+            className="btn-ghost text-[12px]"
+            title="Edit collection schema"
+          >
+            <Pencil size={13} /> Edit
+          </button>
+        )}
+        {onSettings && (
+          <button
+            onClick={onSettings}
+            className="btn-ghost text-[12px]"
+            title="Collection settings & permissions"
+          >
+            <Gear size={13} /> Settings
+          </button>
+        )}
         {onDelete && (
           <button
             onClick={onDelete}

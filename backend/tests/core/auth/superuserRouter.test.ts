@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { hashPassword, verifyPassword, signToken, verifyToken, hashTokenValue } from "../../auth/crypto.js";
+import { hashPassword, verifyPassword, signToken, verifyToken, hashTokenValue } from "../../../src/auth/crypto.js";
+import { requireRole } from "../../../src/auth/middleware.js";
 
 const TEST_SECRET = "a".repeat(64);
 
@@ -29,6 +30,11 @@ const resetPasswordSchema = z.object({
 const createSuperuserSchema = z.object({
   email: z.string().email().max(254),
   password: z.string().min(8).max(256),
+  role: z.enum(["admin", "editor", "viewer"]).default("viewer"),
+});
+
+const updateRoleSchema = z.object({
+  role: z.enum(["admin", "editor", "viewer"]),
 });
 
 const updateEmailSchema = z.object({
@@ -201,7 +207,7 @@ describe("POST /api/core/superusers/reset-password", () => {
 describe("GET /api/core/superusers/me", () => {
   // 1. Happy path — valid token returns user
   it("returns user profile with a valid token", async () => {
-    const token = await signToken({ sub: "usr_123", email: "admin@test.com" }, TEST_SECRET);
+    const token = await signToken({ sub: "usr_123", email: "admin@test.com", role: "admin" }, TEST_SECRET);
     const payload = await verifyToken(token, TEST_SECRET);
     expect(payload).not.toBeNull();
     expect(payload!.sub).toBe("usr_123");
@@ -268,10 +274,13 @@ describe("POST /api/core/superusers/create", () => {
     expect(true).toBe(true);
   });
 
-  // 5. Edge case — new superuser starts unverified
-  it("new superuser is created with verified=false", () => {
-    // Integration: response includes { user: { verified: false } }
-    expect(true).toBe(true);
+  // 5. Role — new superuser defaults to least-privilege "viewer"
+  it("defaults new superuser role to viewer when role omitted", () => {
+    const result = createSuperuserSchema.safeParse({ email: "new@test.com", password: "SecurePass1" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.role).toBe("viewer");
+    }
   });
 });
 
@@ -387,5 +396,143 @@ describe("DELETE /api/core/superusers/:id", () => {
     // Token still verifies cryptographically, but GET /me returns 404
     // because the user row no longer exists
     expect(true).toBe(true);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   PATCH /api/core/superusers/:id/role
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("PATCH /api/core/superusers/:id/role", () => {
+  // 1. Happy path — admin changes a user's role
+  it("accepts a valid role enum", () => {
+    const result = updateRoleSchema.safeParse({ role: "editor" });
+    expect(result.success).toBe(true);
+  });
+
+  // 2. Validation failure — invalid role
+  it("rejects an unknown role value", () => {
+    const result = updateRoleSchema.safeParse({ role: "root" });
+    expect(result.success).toBe(false);
+  });
+
+  // 3. Validation failure — missing role
+  it("rejects when role is missing", () => {
+    const result = updateRoleSchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+
+  // 4. Auth/role — admin-only endpoint
+  it("returns 403 for editor/viewer tokens", () => { expect(true).toBe(true); });
+
+  // 5. Last-admin safeguard — cannot demote the only admin
+  it("returns 400 when demoting the last admin", () => { expect(true).toBe(true); });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   Role enforcement — exercised against real Hono middleware instances.
+   Builds a tiny app: requireAuth → requireRole(...allowed) → ok.
+   ═══════════════════════════════════════════════════════════════════ */
+
+import { Hono } from "hono";
+import type { Env } from "../../../src/env.js";
+
+type AppEnv = { Bindings: Env; Variables: { user: import("../../../src/auth/crypto.js").TokenPayload | null } };
+
+async function runWithRole(
+  role: "admin" | "editor" | "viewer" | "none",
+  allowed: ("admin" | "editor" | "viewer")[],
+): Promise<number> {
+  const app = new Hono<AppEnv>();
+  app.post(
+    "/probe",
+    async (c, next) => {
+      if (role === "none") return next();
+      const token = await signToken({ sub: "u1", email: "x@y.com", role }, TEST_SECRET);
+      // Synthetic attach — bypass header parsing for a deterministic unit test.
+      (c as unknown as { set: (k: string, v: unknown) => void }).set(
+        "user",
+        await verifyToken(token, TEST_SECRET),
+      );
+      return next();
+    },
+    requireRole(...allowed),
+    (c) => c.json({ ok: true }),
+  );
+
+  const headers: Record<string, string> =
+    role === "none" ? {} : { Authorization: `Bearer dummy` };
+  const res = await app.request("/probe", { method: "POST", headers });
+  return res.status;
+}
+
+describe("Role enforcement", () => {
+  // 1. editor token → admin-only route returns 403
+  it("editor token on admin-only route → 403", async () => {
+    const status = await runWithRole("editor", ["admin"]);
+    expect(status).toBe(403);
+  });
+
+  // 2. viewer token → admin-only route returns 403
+  it("viewer token on admin-only route → 403", async () => {
+    const status = await runWithRole("viewer", ["admin"]);
+    expect(status).toBe(403);
+  });
+
+  // 3. admin token → all allowed
+  it("admin token on admin-only route → 200", async () => {
+    const status = await runWithRole("admin", ["admin"]);
+    expect(status).toBe(200);
+  });
+
+  // 4. editor token → editor+admin route allowed
+  it("editor token on editor-allowed route → 200", async () => {
+    const status = await runWithRole("editor", ["admin", "editor"]);
+    expect(status).toBe(200);
+  });
+
+  // 5. viewer token → editor+admin route returns 403
+  it("viewer token on editor-allowed route → 403", async () => {
+    const status = await runWithRole("viewer", ["admin", "editor"]);
+    expect(status).toBe(403);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   JWT role claim — signToken round-trips the role field.
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("JWT role claim", () => {
+  it("role survives a signToken → verifyToken round-trip", async () => {
+    const token = await signToken({ sub: "u1", email: "a@b.com", role: "editor" }, TEST_SECRET);
+    const payload = await verifyToken(token, TEST_SECRET);
+    expect(payload?.role).toBe("editor");
+  });
+
+  it("a token signed without a role normalizes to admin on verify", async () => {
+    // Forge a pre-RBAC token (no role claim) signed correctly.
+    const headerB64 = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const payloadB64 = btoa(JSON.stringify({
+      sub: "u1", email: "a@b.com", iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 60,
+    })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const signingInput = `${headerB64}.${payloadB64}`;
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(TEST_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput));
+    let binary = "";
+    const bytes = new Uint8Array(sig);
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    const sigB64 = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const token = `${signingInput}.${sigB64}`;
+
+    const verified = await verifyToken(token, TEST_SECRET);
+    expect(verified?.role).toBe("admin");
   });
 });

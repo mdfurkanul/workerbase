@@ -8,6 +8,16 @@ export type CollectionType = "base" | "user" | "view";
 
 export type PermissionScope = "superuser" | "authenticated" | "public";
 
+/**
+ * Dashboard RBAC roles for `_superusers`.
+ *
+ *   admin  — full power (manage users, collections, schema, SQL queries)
+ *   editor — records CRUD + read everywhere; cannot manage collections,
+ *            users, or saved SQL queries
+ *   viewer — read-only everywhere
+ */
+export type SuperuserRole = "admin" | "editor" | "viewer";
+
 /* ═══════════════════════════════════════════════════════════════════
    Field definitions — stored as JSON in _collections.schema
    ═══════════════════════════════════════════════════════════════════ */
@@ -157,19 +167,7 @@ export const superusers = sqliteTable("_superusers", {
   passwordHash: text("password_hash").notNull(),
   passwordSalt: text("password_salt").notNull(),
   tokenKey: text("token_key").notNull().default(""),
-  verified: integer("verified", { mode: "boolean" }).notNull().default(false),
-  createdAt: integer("created_at").notNull(),
-  updatedAt: integer("updated_at").notNull(),
-});
-
-/* ─── _users — general-purpose auth users (tenant collections) ────── */
-
-export const users = sqliteTable("_users", {
-  id: text("id").primaryKey(),
-  email: text("email").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
-  passwordSalt: text("password_salt").notNull(),
-  tokenKey: text("token_key").notNull().default(""),
+  role: text("role").$type<SuperuserRole>().notNull().default("admin"),
   verified: integer("verified", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
@@ -296,9 +294,6 @@ export const sqlQueries = sqliteTable("_sqlQueries", {
 
 export type Superuser = typeof superusers.$inferSelect;
 export type NewSuperuser = typeof superusers.$inferInsert;
-
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
 
 export type ExternalAuth = typeof externalAuths.$inferSelect;
 export type NewExternalAuth = typeof externalAuths.$inferInsert;

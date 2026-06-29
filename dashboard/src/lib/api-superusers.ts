@@ -11,6 +11,7 @@ import type {
   AuthResponse,
   CreateSuperuserResponse,
   Superuser,
+  SuperuserRole,
 } from "./api-types";
 
 // ─────────────────────────────────────────────────────────────
@@ -99,9 +100,37 @@ export async function apiGetMe(): Promise<{ user: Superuser }> {
 export async function apiCreateSuperuser(
   email: string,
   password: string,
+  role?: SuperuserRole,
 ): Promise<CreateSuperuserResponse> {
   return apiClient.post<CreateSuperuserResponse>(
     "/api/core/superusers/create",
-    { email, password },
+    { email, password, role: role ?? "viewer" },
   );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  GET /api/core/superusers/list  (admin-only)
+// ─────────────────────────────────────────────────────────────
+
+export async function apiListUsers(): Promise<{ users: Superuser[] }> {
+  return apiClient.get<{ users: Superuser[] }>("/api/core/superusers/list");
+}
+
+// ─────────────────────────────────────────────────────────────
+//  DELETE /api/core/superusers/:id  (admin-only)
+// ─────────────────────────────────────────────────────────────
+
+export async function apiDeleteUser(id: string): Promise<{ success: boolean }> {
+  return apiClient.del<{ success: boolean }>(`/api/core/superusers/${encodeURIComponent(id)}`);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PATCH /api/core/superusers/:id/role  (admin-only)
+// ─────────────────────────────────────────────────────────────
+
+export async function apiUpdateUserRole(
+  id: string,
+  role: SuperuserRole,
+): Promise<{ user: { id: string; role: SuperuserRole } }> {
+  return apiClient.patch(`/api/core/superusers/${encodeURIComponent(id)}/role`, { role });
 }

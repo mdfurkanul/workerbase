@@ -1,25 +1,11 @@
 {
   // WorkerBase backend — Cloudflare Worker.
-  // This file lives in backend/ so all paths are relative to this directory.
   //
-  // Environments:
-  //   local   — `npm run dev`  (D1/R2 live in .wrangler/state)
-  //   preprod — `npm run deploy:preprod`
-  //   prod    — `npm run deploy:prod`
+  // Two D1 databases:
+  //   SYSTEM_DB  — system tables (_superusers, _collections, _tokens, _logs, etc.)
+  //   DB         — user-created collection tables (posts, members, etc.)
   //
-  // Create remote D1 databases:
-  //   npx wrangler d1 create workerbase-db-preprod
-  //   npx wrangler d1 create workerbase-db-prod
-  // Copy the returned database_id into the env blocks below.
-  //
-  // Create remote R2 buckets:
-  //   npx wrangler r2 bucket create workerbase-storage-preprod
-  //   npx wrangler r2 bucket create workerbase-storage-prod
-  //
-  // Apply migrations:
-  //   npm run migrate:local
-  //   npm run migrate:preprod
-  //   npm run migrate:prod
+  // This gives real isolation: system metadata is separate from user data.
 
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "workerbase",
@@ -27,109 +13,99 @@
   "compatibility_date": "2025-01-15",
   "compatibility_flags": ["nodejs_compat"],
 
-  // D1 — primary metadata store + dynamic tenant tables.
   "d1_databases": [
     {
-      "binding": "DB",
-      "database_name": "workerbase-db",
+      "binding": "SYSTEM_DB",
+      "database_name": "workerbase-system",
       "database_id": "local",
-      "migrations_dir": "migrations"
-    }
-  ],
-
-  // R2 — blob/file storage.
-  "r2_buckets": [
+      "migrations_dir": "migrations/system"
+    },
     {
-      "binding": "STORAGE",
-      "bucket_name": "workerbase-storage"
+      "binding": "DB",
+      "database_name": "workerbase-data",
+      "database_id": "local"
     }
   ],
 
-  // Durable Objects — one isolated RealtimeHub instance per collection name.
+  "r2_buckets": [
+    { "binding": "STORAGE", "bucket_name": "workerbase-storage" }
+  ],
+
   "durable_objects": {
     "bindings": [
-      {
-        "name": "REALTIME",
-        "class_name": "RealtimeHub"
-      }
+      { "name": "REALTIME", "class_name": "RealtimeHub" }
     ]
   },
   "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["RealtimeHub"]
-    }
+    { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
   ],
 
-  "observability": {
-    "enabled": true
-  },
+  "observability": { "enabled": true },
 
-  // ─── Environments ──────────────────────────────────────────────────
   "env": {
-    // ── Local development ──
+    // ── Local ──
     "local": {
       "name": "workerbase-local",
-      "vars": {
-        "ENVIRONMENT": "local"
-      },
+      "vars": { "ENVIRONMENT": "local" },
       "d1_databases": [
         {
-          "binding": "DB",
-          "database_name": "workerbase-db-local",
+          "binding": "SYSTEM_DB",
+          "database_name": "workerbase-system-local",
           "database_id": "local",
-          "migrations_dir": "migrations"
+          "migrations_dir": "migrations/system"
+        },
+        {
+          "binding": "DB",
+          "database_name": "workerbase-data-local",
+          "database_id": "local"
         }
       ],
       "r2_buckets": [
-        {
-          "binding": "STORAGE",
-          "bucket_name": "workerbase-storage-local"
-        }
+        { "binding": "STORAGE", "bucket_name": "workerbase-storage-local" }
       ]
     },
 
     // ── Pre-production ──
     "preprod": {
       "name": "workerbase-preprod",
-      "vars": {
-        "ENVIRONMENT": "preprod"
-      },
+      "vars": { "ENVIRONMENT": "preprod" },
       "d1_databases": [
         {
+          "binding": "SYSTEM_DB",
+          "database_name": "workerbase-system-preprod",
+          "database_id": "REPLACE_WITH_PREPROD_SYSTEM_D1_ID",
+          "migrations_dir": "migrations/system"
+        },
+        {
           "binding": "DB",
-          "database_name": "workerbase-db-preprod",
-          "database_id": "REPLACE_WITH_PREPROD_D1_ID",
-          "migrations_dir": "migrations"
+          "database_name": "workerbase-data-preprod",
+          "database_id": "REPLACE_WITH_PREPROD_DATA_D1_ID"
         }
       ],
       "r2_buckets": [
-        {
-          "binding": "STORAGE",
-          "bucket_name": "workerbase-storage-preprod"
-        }
+        { "binding": "STORAGE", "bucket_name": "workerbase-storage-preprod" }
       ]
     },
 
     // ── Production ──
     "prod": {
       "name": "workerbase-prod",
-      "vars": {
-        "ENVIRONMENT": "prod"
-      },
+      "vars": { "ENVIRONMENT": "prod" },
       "d1_databases": [
         {
+          "binding": "SYSTEM_DB",
+          "database_name": "workerbase-system-prod",
+          "database_id": "REPLACE_WITH_PROD_SYSTEM_D1_ID",
+          "migrations_dir": "migrations/system"
+        },
+        {
           "binding": "DB",
-          "database_name": "workerbase-db-prod",
-          "database_id": "REPLACE_WITH_PROD_D1_ID",
-          "migrations_dir": "migrations"
+          "database_name": "workerbase-data-prod",
+          "database_id": "REPLACE_WITH_PROD_DATA_D1_ID"
         }
       ],
       "r2_buckets": [
-        {
-          "binding": "STORAGE",
-          "bucket_name": "workerbase-storage-prod"
-        }
+        { "binding": "STORAGE", "bucket_name": "workerbase-storage-prod" }
       ]
     }
   }

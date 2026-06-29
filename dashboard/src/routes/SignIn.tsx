@@ -41,7 +41,7 @@ export default function SignIn() {
     setBusy(true);
     try {
       const res = await apiLogin(values.email, values.password);
-      setUser({ ...res.user, role: "superuser" as const });
+      setUser(res.user);
       navigate("/");
     } catch (err) {
       if (err instanceof ApiError) {

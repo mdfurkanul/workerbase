@@ -160,9 +160,12 @@ export type EmailTemplates = Partial<Record<EmailTemplateId, EmailTemplate>>;
 //  Superuser auth types
 // ═══════════════════════════════════════════════════════════════
 
+export type SuperuserRole = "admin" | "editor" | "viewer";
+
 export interface Superuser {
   id: string;
   email: string;
+  role: SuperuserRole;
   verified: boolean;
   createdAt?: number;
   updatedAt?: number;
@@ -181,6 +184,7 @@ export interface LoginRequest {
 export interface CreateSuperuserRequest {
   email: string;
   password: string;
+  role?: SuperuserRole;
 }
 
 export interface CreateSuperuserResponse {

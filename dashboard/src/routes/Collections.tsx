@@ -14,6 +14,7 @@ import AuthConfig, { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/componen
 import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
 import Modal from "@/components/Modal";
 import { useCollections } from "@/hooks/useCollections";
+import { useAuth, isAdmin, canEdit } from "@/hooks/useAuth";
 import { type Record as Row, type Collection } from "@/lib/mockData";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
 import { getVisibleColumns, setVisibleColumns, saveEditedSchema, setEditedName, markDeleted } from "@/lib/collectionStore";
@@ -41,15 +42,18 @@ export default function Collections() {
 /* ─── Collections index (no collection selected) ───────────────────── */
 function CollectionsIndex() {
   const { collections, loading, error, refresh } = useCollections();
+  const { user } = useAuth();
 
   return (
     <AppShell>
       <PageHeader
         breadcrumbs={[<span>Collections</span>]}
         actions={
-          <Link to="/collections/new" className="btn-primary text-[12px]">
-            <Plus size={13} /> New collection
-          </Link>
+          isAdmin(user) ? (
+            <Link to="/collections/new" className="btn-primary text-[12px]">
+              <Plus size={13} /> New collection
+            </Link>
+          ) : undefined
         }
       />
       <div className="flex-1 overflow-y-auto">
@@ -73,9 +77,13 @@ function CollectionsIndex() {
           ) : collections.length === 0 ? (
             <div className="p-8 text-center text-ink-muted text-[13px]">
               No collections yet.{" "}
-              <Link to="/collections/new" className="text-brand hover:underline">
-                Create one →
-              </Link>
+              {isAdmin(user) ? (
+                <Link to="/collections/new" className="text-brand hover:underline">
+                  Create one →
+                </Link>
+              ) : (
+                "Ask an admin to create one."
+              )}
             </div>
           ) : (
             <ul>
@@ -106,9 +114,11 @@ function CollectionsIndex() {
 function CollectionView({ name }: { name: string }) {
   const navigate = useNavigate();
   const { collections, loading, refresh } = useCollections();
+  const { user } = useAuth();
   const collection = collections.find((c) => c.name === name);
   const [tick, setTick] = useState(0);
   const editSaveRef = useRef<(() => void) | null>(null);
+  const newRecordSaveRef = useRef<(() => void) | null>(null);
   const [params, setParams] = useSearchParams();
   const action = params.get("action");
 
@@ -187,15 +197,19 @@ function CollectionView({ name }: { name: string }) {
         count={collection.count}
         onReload={reload}
         reloading={loading}
-        onEdit={() => openSlide("edit")}
-        onSettings={() => openSlide("settings")}
-        onDelete={name.startsWith("_") || name === "logs" ? undefined : () => setDeleteOpen(true)}
+        onEdit={isAdmin(user) ? () => openSlide("edit") : undefined}
+        onSettings={isAdmin(user) ? () => openSlide("settings") : undefined}
+        onDelete={
+          isAdmin(user) && !(name.startsWith("_") || name === "logs")
+            ? () => setDeleteOpen(true)
+            : undefined
+        }
       />
       <RecordsTable
         key={tick}
         collectionName={collection.name}
         schema={collection.schema}
-        onNewRecord={() => openSlide("new")}
+        onNewRecord={canEdit(user) ? () => openSlide("new") : undefined}
       />
 
       {/* Slide-over panels */}
@@ -243,13 +257,21 @@ function CollectionView({ name }: { name: string }) {
         footer={
           <>
             <button onClick={closeSlide} className="btn-ghost">Cancel</button>
-            <button onClick={closeSlide} className="btn-primary">
+            <button
+              onClick={() => newRecordSaveRef.current?.()}
+              className="btn-primary"
+            >
               <Plus size={14} /> Create record
             </button>
           </>
         }
       >
-        <NewRecordPanel schema={collection.schema} />
+        <NewRecordPanel
+          schema={collection.schema}
+          collectionName={collection.name}
+          onCreated={() => { reload(); closeSlide(); }}
+          registerSave={(fn) => { newRecordSaveRef.current = fn; }}
+        />
       </SlideOver>
 
       {/* Delete confirmation modal */}
@@ -315,6 +337,7 @@ function RecordsTable({
 }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const q = params.get("q") ?? "";
   const sort = params.get("sort") ?? "";
   const filter = params.get("filter") ?? "";
@@ -359,6 +382,7 @@ function RecordsTable({
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     setRecordsLoading(true);
@@ -383,7 +407,7 @@ function RecordsTable({
         setTotalPages(1);
       })
       .finally(() => setRecordsLoading(false));
-  }, [collectionName, page, perPage]);
+  }, [collectionName, page, perPage, reloadKey]);
 
   // Pagination math from the real API total.
   const currentPage = Math.min(page, totalPages);
@@ -449,10 +473,16 @@ function RecordsTable({
     URL.revokeObjectURL(url);
   }
 
-  function handleDelete() {
-    // Note: real record deletion happens via API — this is a UI-only clear.
+  async function handleDelete() {
+    const ids = Array.from(selectedIds);
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.del(`/api/core/collections/${encodeURIComponent(collectionName)}/records/${encodeURIComponent(id)}`).catch(() => {}),
+      ),
+    );
     setSelectedIds(new Set());
     setConfirmOpen(false);
+    setReloadKey((k) => k + 1);
   }
 
   function update(p: Record<string, string | null>) {
@@ -476,7 +506,7 @@ function RecordsTable({
   // Build a compact list of page numbers around the current page.
   const pageNumbers = buildPageList(currentPage, totalPages);
 
-  // Snapshot for the drawer — immediate preview while the dummy fetch runs.
+  // Snapshot for the drawer — immediate preview while the record fetch runs.
   const drawerSnapshot = drawerRow
     ? Object.entries(drawerRow).map(([key, value]) => ({ key, value }))
     : undefined;
@@ -512,12 +542,14 @@ function RecordsTable({
           visible={visible}
           onChange={handleVisibleChange}
         />
-        <button
-          onClick={onNewRecord}
-          className="btn-primary text-[12px] ml-auto"
-        >
-          <Plus size={13} /> New record
-        </button>
+        {canEdit(user) && onNewRecord && (
+          <button
+            onClick={onNewRecord}
+            className="btn-primary text-[12px] ml-auto"
+          >
+            <Plus size={13} /> New record
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
@@ -614,14 +646,16 @@ function RecordsTable({
         open={drawerRow !== null}
         collectionName={collectionName}
         recordId={drawerRow?.id ?? null}
+        schema={allColumns}
         snapshot={drawerSnapshot}
         onClose={() => setDrawerRow(null)}
+        onChanged={() => setReloadKey((k) => k + 1)}
       />
 
       <SelectionBar
         count={selectedIds.size}
         onClear={clearSelection}
-        onDelete={() => setConfirmOpen(true)}
+        onDelete={canEdit(user) ? () => setConfirmOpen(true) : undefined}
         onDownload={handleDownload}
       />
 
@@ -792,16 +826,97 @@ function EditPanel({
 /* ─── SlideOver panel: new record ─────────────────────────────────── */
 function NewRecordPanel({
   schema,
+  collectionName,
+  onCreated,
+  registerSave,
 }: {
   schema: { name: string; type: string }[];
+  collectionName: string;
+  onCreated: () => void;
+  registerSave: (fn: () => void) => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
-  const fields = schema.filter(
-    (f) => f.name !== "id" && f.name !== "created" && f.name !== "updated",
-  );
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Filter out system/auto-managed columns.
+  const PROTECTED = new Set(["id", "created", "updated", "created_at", "updated_at", "rowid", "token_key", "password_hash", "password_salt", "verified"]);
+  const fields = schema.filter((f) => !PROTECTED.has(f.name));
+
+  async function handleSave() {
+    setSubmitError(null);
+
+    // Validate each field based on its type.
+    const errs: Record<string, string> = {};
+    for (const f of fields) {
+      const raw = (values[f.name] ?? "").trim();
+      if (raw === "") continue; // empty is allowed (field may be optional)
+
+      switch (f.type) {
+        case "integer":
+          if (!/^-?\d+$/.test(raw)) errs[f.name] = `${f.name} must be a whole number`;
+          break;
+        case "real":
+          if (isNaN(Number(raw))) errs[f.name] = `${f.name} must be a valid number`;
+          break;
+        case "email":
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) errs[f.name] = `${f.name} must be a valid email address`;
+          break;
+        case "url":
+          if (!/^https?:\/\/.+/.test(raw)) errs[f.name] = `${f.name} must be a valid URL (starting with http:// or https://)`;
+          break;
+        case "bool":
+          if (!["true", "false", "1", "0"].includes(raw.toLowerCase())) errs[f.name] = `${f.name} must be true or false`;
+          break;
+      }
+    }
+
+    if (Object.keys(errs).length > 0) {
+      setErrors(errs);
+      return;
+    }
+    setErrors({});
+
+    setBusy(true);
+    try {
+      // Build payload — only include non-empty values.
+      const payload: Record<string, unknown> = {};
+      for (const f of fields) {
+        const v = (values[f.name] ?? "").trim();
+        if (v !== "") {
+          if (f.type === "integer") payload[f.name] = parseInt(v, 10);
+          else if (f.type === "real") payload[f.name] = parseFloat(v);
+          else if (f.type === "bool") payload[f.name] = v === "true" || v === "1";
+          else payload[f.name] = v;
+        }
+      }
+
+      await apiClient.post(`/api/core/collections/${encodeURIComponent(collectionName)}/records`, payload);
+      onCreated();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to create record";
+      // Try to extract the D1 error detail from the API response.
+      try {
+        const detail = JSON.parse(msg);
+        setSubmitError(detail.detail || detail.error || msg);
+      } catch {
+        setSubmitError(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  registerSave(handleSave);
 
   return (
     <div className="px-5 py-5 space-y-4">
+      {submitError && (
+        <div className="bg-err-bg text-err text-[12px] border border-line-strong rounded px-3 py-2 font-mono">
+          {submitError}
+        </div>
+      )}
       {fields.length === 0 ? (
         <p className="text-[13px] text-ink-muted">
           This collection has no editable fields yet.
@@ -813,17 +928,32 @@ function NewRecordPanel({
               {f.name}{" "}
               <span className="text-ink-faint normal-case font-normal">· {f.type}</span>
             </span>
-            <input
-              value={values[f.name] ?? ""}
-              onChange={(e) =>
-                setValues((v) => ({ ...v, [f.name]: e.target.value }))
-              }
-              placeholder={`Enter ${f.type} value`}
-              className="field-input mt-1"
-            />
+            {f.type === "bool" ? (
+              <select
+                value={values[f.name] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+                className="field-input mt-1"
+              >
+                <option value="">— unset —</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            ) : (
+              <input
+                type={f.type === "integer" || f.type === "real" ? "number" : "text"}
+                value={values[f.name] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+                placeholder={`Enter ${f.type} value`}
+                className={`field-input mt-1 ${errors[f.name] ? "border-err" : ""}`}
+              />
+            )}
+            {errors[f.name] && (
+              <div className="text-err text-[12px] mt-1">{errors[f.name]}</div>
+            )}
           </label>
         ))
       )}
+      {busy && <p className="text-[12px] text-ink-muted">Creating…</p>}
     </div>
   );
 }

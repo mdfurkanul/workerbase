@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CornerDownLeft, Loader2, Pencil, Play, Plus, Save, Trash2 } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 import { apiClient } from "@/lib/api-client";
+import { useAuth, canEdit } from "@/hooks/useAuth";
 
 /* ─── Types ──────────────────────────────────────────────────────── */
 interface SavedQuery {
@@ -23,6 +24,8 @@ interface ExecuteResult {
 }
 
 export default function SqlConsole() {
+  const { user } = useAuth();
+  const allowSave = canEdit(user);
   const [saved, setSaved] = useState<SavedQuery[]>([]);
   const [savedLoading, setSavedLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -200,9 +203,11 @@ export default function SqlConsole() {
         breadcrumbs={[<span>SQL console</span>]}
         actions={
           <>
-            <button onClick={handleSave} className="btn-ghost text-[12px]" title="Save query">
-              <Save size={13} /> Save
-            </button>
+            {allowSave && (
+              <button onClick={handleSave} className="btn-ghost text-[12px]" title="Save query">
+                <Save size={13} /> Save
+              </button>
+            )}
             <button onClick={() => void run()} disabled={running} className="btn-primary text-[12px]">
               {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
               Run
@@ -218,9 +223,11 @@ export default function SqlConsole() {
             <span className="label-mono">Saved</span>
             <div className="flex items-center gap-0.5">
               <span className="label-mono text-ink-faint mr-1">{saved.length}</span>
-              <button onClick={handleNewQuery} className="btn-icon" title="New query">
-                <Plus size={13} />
-              </button>
+              {allowSave && (
+                <button onClick={handleNewQuery} className="btn-icon" title="New query">
+                  <Plus size={13} />
+                </button>
+              )}
             </div>
           </div>
           {savedLoading ? (
@@ -248,13 +255,15 @@ export default function SqlConsole() {
                     >
                       {q.title}
                     </button>
-                    <button
-                      onClick={() => handleDelete(q.id)}
-                      className="opacity-0 group-hover:opacity-100 p-1 mr-1 text-ink-faint hover:text-err transition"
-                      title="Delete"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    {allowSave && (
+                      <button
+                        onClick={() => handleDelete(q.id)}
+                        className="opacity-0 group-hover:opacity-100 p-1 mr-1 text-ink-faint hover:text-err transition"
+                        title="Delete"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                   </div>
                 </li>
               ))}

@@ -11,6 +11,7 @@ import ApiPreview from "@/routes/ApiPreview";
 import Logs from "@/routes/Logs";
 import SqlConsole from "@/routes/SqlConsole";
 import Settings from "@/routes/Settings";
+import Users from "@/routes/Users";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import "./index.css";
 
@@ -40,6 +41,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/api-preview" element={<ApiPreview />} />
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/sql" element={<SqlConsole />} />
+                <Route path="/users" element={<Users />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

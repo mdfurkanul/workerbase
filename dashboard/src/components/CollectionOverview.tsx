@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Plus, Minus, Shield, X } from "lucide-react";
 import TypeBadge from "@/components/TypeBadge";
 import type { Collection } from "@/lib/mockData";
-import { SYSTEM_LINKS } from "@/lib/mockData";
 import { collectionTypeMeta } from "@/lib/collectionTypes";
+import { useAuth, isAdmin } from "@/hooks/useAuth";
 
 interface Props {
   open: boolean;
@@ -17,26 +17,27 @@ const FIELD_H = 26;
 const FOOTER_H = 24;
 
 /**
- * Dummy relations — will be replaced by real foreign-key metadata fetched
- * from the backend. Each entry links a field on `from` to `to.id`.
+ * Foreign-key relations between collections. Currently empty — real
+ * relation metadata will be derived from schema `relation` field types
+ * once the backend exposes it. The diagram still renders cards and
+ * fields; only the connecting lines are absent until then.
  */
-const DUMMY_RELATIONS: { from: string; fromField: string; to: string; toField: string }[] = [
-  { from: "posts", fromField: "author", to: "users", toField: "id" },
-  { from: "messages", fromField: "from", to: "users", toField: "id" },
-  { from: "invoices", fromField: "client", to: "clients", toField: "id" },
-  { from: "followups", fromField: "client", to: "clients", toField: "id" },
-  { from: "payments", fromField: "client", to: "clients", toField: "id" },
-  { from: "top_posts", fromField: "id", to: "posts", toField: "id" },
-];
+const RELATIONS: { from: string; fromField: string; to: string; toField: string }[] = [];
 
-const SYSTEM_NAMES = new Set(SYSTEM_LINKS.map((s) => s.name));
+/**
+ * System tables are anything prefixed with "_" (e.g. _superusers,
+ * _externalAuths) plus the "logs" table. They are already injected into
+ * the `collections` prop by `useCollections`, so no synthesis is needed.
+ */
 function isSystem(c: { name: string }): boolean {
-  return c.name.startsWith("_") || SYSTEM_NAMES.has(c.name);
+  return c.name.startsWith("_") || c.name === "logs";
 }
 
 interface Pt { x: number; y: number; }
 
 export default function CollectionOverview({ open, onClose, collections }: Props) {
+  const { user } = useAuth();
+  const adminOnly = isAdmin(user);
   const [showSystem, setShowSystem] = useState(false);
   const [tab, setTab] = useState<"fields" | "rules">("fields");
   const [zoom, setZoom] = useState(1);
@@ -55,37 +56,9 @@ export default function CollectionOverview({ open, onClose, collections }: Props
   const visible = useMemo(() => {
     const userTables = collections.filter((c) => !isSystem(c));
     if (!showSystem) return userTables;
-    // Synthesise system table entries from SYSTEM_LINKS so they render in
-    // the diagram (they aren't part of the loaded collections JSON).
-    const systemTables: Collection[] = SYSTEM_LINKS.map((s) => ({
-      id: `sys_${s.name}`,
-      name: s.name,
-      type: s.type,
-      count: 0,
-      schema:
-        s.name === "_superusers"
-          ? [
-              { name: "id", type: "text" },
-              { name: "email", type: "text" },
-              { name: "password_hash", type: "text" },
-              { name: "password_salt", type: "text" },
-              { name: "created_at", type: "integer" },
-            ]
-          : s.name === "_externalAuths"
-            ? [
-                { name: "id", type: "text" },
-                { name: "user", type: "text" },
-                { name: "provider", type: "text" },
-                { name: "provider_id", type: "text" },
-                { name: "created_at", type: "integer" },
-              ]
-            : [
-                { name: "id", type: "text" },
-                { name: "level", type: "text" },
-                { name: "message", type: "text" },
-                { name: "created_at", type: "integer" },
-              ],
-    }));
+    // System tables are part of the `collections` list (injected by
+    // `useCollections`) — just include them.
+    const systemTables = collections.filter((c) => isSystem(c));
     return [...userTables, ...systemTables];
   }, [collections, showSystem]);
 
@@ -110,15 +83,17 @@ export default function CollectionOverview({ open, onClose, collections }: Props
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowSystem((v) => !v)}
-              className={`btn-ghost text-[12px] ${showSystem ? "border-brand text-brand" : ""}`}
-              title={showSystem ? "Hide system collections" : "Show system collections"}
-              aria-pressed={showSystem}
-            >
-              <Shield size={12} />
-              {showSystem ? "Hide system" : "Show system"}
-            </button>
+            {adminOnly && (
+              <button
+                onClick={() => setShowSystem((v) => !v)}
+                className={`btn-ghost text-[12px] ${showSystem ? "border-brand text-brand" : ""}`}
+                title={showSystem ? "Hide system collections" : "Show system collections"}
+                aria-pressed={showSystem}
+              >
+                <Shield size={12} />
+                {showSystem ? "Hide system" : "Show system"}
+              </button>
+            )}
             <button onClick={onClose} className="btn-icon" aria-label="Close">
               <X size={16} />
             </button>
@@ -288,7 +263,7 @@ function FieldsDiagram({
 
   // Filter relations to those whose endpoints are both visible.
   const visibleNames = new Set(collections.map((c) => c.name));
-  const relations = DUMMY_RELATIONS.filter(
+  const relations = RELATIONS.filter(
     (r) => visibleNames.has(r.from) && visibleNames.has(r.to),
   );
 
@@ -467,7 +442,7 @@ function CollectionCard({
             <li className="px-3 py-2 text-[12px] text-ink-faint italic">No fields defined.</li>
           )}
           {fields.map((f) => {
-            const isRel = DUMMY_RELATIONS.some(
+            const isRel = RELATIONS.some(
               (r) =>
                 (r.from === collection.name && r.fromField === f.name) ||
                 (r.to === collection.name && r.toField === f.name),

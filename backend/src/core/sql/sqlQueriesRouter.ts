@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../../env.js";
-import { requireAuth } from "../../auth/middleware.js";
+import { requireAuth, requireRole } from "../../auth/middleware.js";
 
 /**
  * Saved SQL queries — CRUD for the SQL console.
@@ -30,7 +30,7 @@ export const sqlQueriesRouter = new Hono<{ Bindings: Env }>();
 
 /** GET /api/sql/queries — list all saved queries, newest first. */
 sqlQueriesRouter.get("/queries", requireAuth, async (c) => {
-  const { results } = await c.env.DB.prepare(
+  const { results } = await c.env.SYSTEM_DB.prepare(
     `SELECT id, title, sql, created_by, last_run_at, created_at, updated_at
      FROM _sqlQueries ORDER BY updated_at DESC`,
   ).all();
@@ -40,7 +40,7 @@ sqlQueriesRouter.get("/queries", requireAuth, async (c) => {
 /** GET /api/sql/queries/:id — single saved query. */
 sqlQueriesRouter.get("/queries/:id", requireAuth, async (c) => {
   const id = c.req.param("id");
-  const row = await c.env.DB.prepare(
+  const row = await c.env.SYSTEM_DB.prepare(
     `SELECT id, title, sql, created_by, last_run_at, created_at, updated_at
      FROM _sqlQueries WHERE id = ?`,
   )
@@ -51,7 +51,7 @@ sqlQueriesRouter.get("/queries/:id", requireAuth, async (c) => {
 });
 
 /** POST /api/sql/queries — create a new saved query. */
-sqlQueriesRouter.post("/queries", requireAuth, async (c) => {
+sqlQueriesRouter.post("/queries", requireAuth, requireRole("admin", "editor"), async (c) => {
   const user = c.get("user");
 
   let body: unknown;
@@ -70,7 +70,7 @@ sqlQueriesRouter.post("/queries", requireAuth, async (c) => {
   const now = Date.now();
 
   try {
-    await c.env.DB.prepare(
+    await c.env.SYSTEM_DB.prepare(
       `INSERT INTO _sqlQueries (id, title, sql, created_by, last_run_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, NULL, ?, ?)`,
     )
@@ -96,7 +96,7 @@ sqlQueriesRouter.post("/queries", requireAuth, async (c) => {
 });
 
 /** PATCH /api/sql/queries/:id — update title / sql / lastRunAt. */
-sqlQueriesRouter.patch("/queries/:id", requireAuth, async (c) => {
+sqlQueriesRouter.patch("/queries/:id", requireAuth, requireRole("admin", "editor"), async (c) => {
   const id = c.req.param("id");
 
   let body: unknown;
@@ -112,7 +112,7 @@ sqlQueriesRouter.patch("/queries/:id", requireAuth, async (c) => {
   }
 
   // Check existence.
-  const existing = await c.env.DB.prepare(
+  const existing = await c.env.SYSTEM_DB.prepare(
     `SELECT id FROM _sqlQueries WHERE id = ?`,
   )
     .bind(id)
@@ -139,14 +139,14 @@ sqlQueriesRouter.patch("/queries/:id", requireAuth, async (c) => {
 
   if (sets.length > 1) {
     values.push(id);
-    await c.env.DB.prepare(
+    await c.env.SYSTEM_DB.prepare(
       `UPDATE _sqlQueries SET ${sets.join(", ")} WHERE id = ?`,
     )
       .bind(...values)
       .run();
   }
 
-  const row = await c.env.DB.prepare(
+  const row = await c.env.SYSTEM_DB.prepare(
     `SELECT id, title, sql, created_by, last_run_at, created_at, updated_at
      FROM _sqlQueries WHERE id = ?`,
   )
@@ -157,10 +157,10 @@ sqlQueriesRouter.patch("/queries/:id", requireAuth, async (c) => {
 });
 
 /** DELETE /api/sql/queries/:id — permanently delete. */
-sqlQueriesRouter.delete("/queries/:id", requireAuth, async (c) => {
+sqlQueriesRouter.delete("/queries/:id", requireAuth, requireRole("admin", "editor"), async (c) => {
   const id = c.req.param("id");
 
-  const result = await c.env.DB.prepare(
+  const result = await c.env.SYSTEM_DB.prepare(
     `DELETE FROM _sqlQueries WHERE id = ?`,
   )
     .bind(id)

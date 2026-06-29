@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../../env.js";
+import type { SuperuserRole } from "../../db/schema.js";
 import {
   hashPassword,
   hashTokenValue,
@@ -8,7 +9,7 @@ import {
   verifyPassword,
   type TokenPayload,
 } from "../../auth/crypto.js";
-import { requireAuth } from "../../auth/middleware.js";
+import { requireAuth, requireRole } from "../../auth/middleware.js";
 
 /**
  * Superuser auth router — dashboard / admin panel authentication.
@@ -53,6 +54,7 @@ const resetPasswordSchema = z.object({
 const createSuperuserSchema = z.object({
   email: z.string().email().max(254),
   password: z.string().min(8).max(256),
+  role: z.enum(["admin", "editor", "viewer"]).default("viewer"),
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -63,6 +65,15 @@ export const superuserAuthRouter = new Hono<{
   Bindings: Env;
   Variables: { user: TokenPayload | null };
 }>();
+
+// ─────────────────────────────────────────────────────────────
+//  Helper: coerce a raw DB role string into a valid SuperuserRole.
+//  Defends against unexpected values; unknown values fall back to "viewer"
+//  (least privilege).
+// ─────────────────────────────────────────────────────────────
+function normalizeRole(raw: unknown): SuperuserRole {
+  return raw === "admin" || raw === "editor" || raw === "viewer" ? raw : "viewer";
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Helper: insert a token row into _tokens
@@ -150,8 +161,8 @@ superuserAuthRouter.post("/login", async (c) => {
   const { email, password } = parsed.data;
   const normalizedEmail = email.toLowerCase().trim();
 
-  const row = await c.env.DB.prepare(
-    `SELECT id, email, password_hash, password_salt, verified FROM _superusers WHERE email = ?`,
+  const row = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, email, password_hash, password_salt, role, verified FROM _superusers WHERE email = ?`,
   )
     .bind(normalizedEmail)
     .first<{
@@ -159,6 +170,7 @@ superuserAuthRouter.post("/login", async (c) => {
       email: string;
       password_hash: string;
       password_salt: string;
+      role: string;
       verified: number;
     }>();
 
@@ -171,9 +183,10 @@ superuserAuthRouter.post("/login", async (c) => {
     return c.json({ error: "invalid_credentials" }, 401);
   }
 
-  const token = await signToken({ sub: row.id, email: row.email }, c.env.AUTH_SECRET);
+  const role = normalizeRole(row.role);
+  const token = await signToken({ sub: row.id, email: row.email, role }, c.env.AUTH_SECRET);
   return c.json({
-    user: { id: row.id, email: row.email, verified: row.verified === 1 },
+    user: { id: row.id, email: row.email, role, verified: row.verified === 1 },
     token,
   });
 });
@@ -197,7 +210,7 @@ superuserAuthRouter.post("/magic-request", async (c) => {
 
   const normalizedEmail = parsed.data.email.toLowerCase().trim();
 
-  const row = await c.env.DB.prepare(`SELECT id, email FROM _superusers WHERE email = ?`)
+  const row = await c.env.SYSTEM_DB.prepare(`SELECT id, email FROM _superusers WHERE email = ?`)
     .bind(normalizedEmail)
     .first<{ id: string; email: string }>();
 
@@ -207,7 +220,7 @@ superuserAuthRouter.post("/magic-request", async (c) => {
   }
 
   const { value } = await createToken(
-    c.env.DB,
+    c.env.SYSTEM_DB,
     row.id,
     "verification",
     EXPIRY_MAGIC_LINK_MS,
@@ -234,16 +247,16 @@ superuserAuthRouter.get("/magic-verify", async (c) => {
     return c.json({ error: "missing_token" }, 400);
   }
 
-  const result = await consumeToken(c.env.DB, tokenValue, "verification");
+  const result = await consumeToken(c.env.SYSTEM_DB, tokenValue, "verification");
   if (!result) {
     return c.json({ error: "invalid_or_expired_token" }, 401);
   }
 
-  const row = await c.env.DB.prepare(
-    `SELECT id, email, verified FROM _superusers WHERE id = ?`,
+  const row = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, email, role, verified FROM _superusers WHERE id = ?`,
   )
     .bind(result.recordRef)
-    .first<{ id: string; email: string; verified: number }>();
+    .first<{ id: string; email: string; role: string; verified: number }>();
 
   if (!row) {
     return c.json({ error: "user_not_found" }, 404);
@@ -251,14 +264,15 @@ superuserAuthRouter.get("/magic-verify", async (c) => {
 
   // Mark the superuser as verified if they weren't already.
   if (row.verified !== 1) {
-    await c.env.DB.prepare(`UPDATE _superusers SET verified = 1, updated_at = ? WHERE id = ?`)
+    await c.env.SYSTEM_DB.prepare(`UPDATE _superusers SET verified = 1, updated_at = ? WHERE id = ?`)
       .bind(Date.now(), row.id)
       .run();
   }
 
-  const sessionToken = await signToken({ sub: row.id, email: row.email }, c.env.AUTH_SECRET);
+  const role = normalizeRole(row.role);
+  const sessionToken = await signToken({ sub: row.id, email: row.email, role }, c.env.AUTH_SECRET);
   return c.json({
-    user: { id: row.id, email: row.email, verified: true },
+    user: { id: row.id, email: row.email, role, verified: true },
     token: sessionToken,
   });
 });
@@ -282,7 +296,7 @@ superuserAuthRouter.post("/forgot-password", async (c) => {
 
   const normalizedEmail = parsed.data.email.toLowerCase().trim();
 
-  const row = await c.env.DB.prepare(`SELECT id, email FROM _superusers WHERE email = ?`)
+  const row = await c.env.SYSTEM_DB.prepare(`SELECT id, email FROM _superusers WHERE email = ?`)
     .bind(normalizedEmail)
     .first<{ id: string; email: string }>();
 
@@ -292,7 +306,7 @@ superuserAuthRouter.post("/forgot-password", async (c) => {
   }
 
   const { value } = await createToken(
-    c.env.DB,
+    c.env.SYSTEM_DB,
     row.id,
     "passwordReset",
     EXPIRY_PASSWORD_RESET_MS,
@@ -327,16 +341,16 @@ superuserAuthRouter.post("/reset-password", async (c) => {
 
   const { token, password } = parsed.data;
 
-  const result = await consumeToken(c.env.DB, token, "passwordReset");
+  const result = await consumeToken(c.env.SYSTEM_DB, token, "passwordReset");
   if (!result) {
     return c.json({ error: "invalid_or_expired_token" }, 401);
   }
 
-  const row = await c.env.DB.prepare(
-    `SELECT id, email FROM _superusers WHERE id = ?`,
+  const row = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, email, role FROM _superusers WHERE id = ?`,
   )
     .bind(result.recordRef)
-    .first<{ id: string; email: string }>();
+    .first<{ id: string; email: string; role: string }>();
 
   if (!row) {
     return c.json({ error: "user_not_found" }, 404);
@@ -345,15 +359,16 @@ superuserAuthRouter.post("/reset-password", async (c) => {
   const { hash, salt } = await hashPassword(password);
   const now = Date.now();
 
-  await c.env.DB.prepare(
+  await c.env.SYSTEM_DB.prepare(
     `UPDATE _superusers SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?`,
   )
     .bind(hash, salt, now, row.id)
     .run();
 
-  const sessionToken = await signToken({ sub: row.id, email: row.email }, c.env.AUTH_SECRET);
+  const role = normalizeRole(row.role);
+  const sessionToken = await signToken({ sub: row.id, email: row.email, role }, c.env.AUTH_SECRET);
   return c.json({
-    user: { id: row.id, email: row.email },
+    user: { id: row.id, email: row.email, role },
     token: sessionToken,
   });
 });
@@ -366,13 +381,14 @@ superuserAuthRouter.get("/me", requireAuth, async (c) => {
   const user = c.get("user");
   if (!user) return c.json({ error: "unauthorized" }, 401);
 
-  const row = await c.env.DB.prepare(
-    `SELECT id, email, verified, created_at, updated_at FROM _superusers WHERE id = ?`,
+  const row = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, email, role, verified, created_at, updated_at FROM _superusers WHERE id = ?`,
   )
     .bind(user.sub)
     .first<{
       id: string;
       email: string;
+      role: string;
       verified: number;
       created_at: number;
       updated_at: number;
@@ -386,6 +402,7 @@ superuserAuthRouter.get("/me", requireAuth, async (c) => {
     user: {
       id: row.id,
       email: row.email,
+      role: normalizeRole(row.role),
       verified: row.verified === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -397,7 +414,7 @@ superuserAuthRouter.get("/me", requireAuth, async (c) => {
 //  POST /api/superusers/create — create a new superuser (protected)
 // ─────────────────────────────────────────────────────────────
 
-superuserAuthRouter.post("/create", requireAuth, async (c) => {
+superuserAuthRouter.post("/create", requireAuth, requireRole("admin"), async (c) => {
   // Only an existing authenticated superuser may create another.
   const currentUser = c.get("user");
   if (!currentUser) {
@@ -405,7 +422,7 @@ superuserAuthRouter.post("/create", requireAuth, async (c) => {
   }
 
   // Verify the caller actually exists in _superusers.
-  const caller = await c.env.DB.prepare(`SELECT id FROM _superusers WHERE id = ?`)
+  const caller = await c.env.SYSTEM_DB.prepare(`SELECT id FROM _superusers WHERE id = ?`)
     .bind(currentUser.sub)
     .first<{ id: string }>();
 
@@ -426,10 +443,11 @@ superuserAuthRouter.post("/create", requireAuth, async (c) => {
   }
 
   const { email, password } = parsed.data;
+  const newRole: SuperuserRole = parsed.data.role ?? "viewer";
   const normalizedEmail = email.toLowerCase().trim();
 
   // Check for existing account.
-  const existing = await c.env.DB.prepare(`SELECT id FROM _superusers WHERE email = ?`)
+  const existing = await c.env.SYSTEM_DB.prepare(`SELECT id FROM _superusers WHERE email = ?`)
     .bind(normalizedEmail)
     .first();
 
@@ -442,11 +460,11 @@ superuserAuthRouter.post("/create", requireAuth, async (c) => {
   const now = Date.now();
 
   try {
-    await c.env.DB.prepare(
-      `INSERT INTO _superusers (id, email, password_hash, password_salt, verified, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 0, ?, ?)`,
+    await c.env.SYSTEM_DB.prepare(
+      `INSERT INTO _superusers (id, email, password_hash, password_salt, role, verified, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
     )
-      .bind(id, normalizedEmail, hash, salt, now, now)
+      .bind(id, normalizedEmail, hash, salt, newRole, now, now)
       .run();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -455,7 +473,7 @@ superuserAuthRouter.post("/create", requireAuth, async (c) => {
 
   // Create a verification token so the new superuser can verify their email.
   const { value } = await createToken(
-    c.env.DB,
+    c.env.SYSTEM_DB,
     id,
     "verification",
     EXPIRY_VERIFICATION_MS,
@@ -473,7 +491,7 @@ superuserAuthRouter.post("/create", requireAuth, async (c) => {
   // the superuser record without a token here; the caller can decide.
   return c.json(
     {
-      user: { id, email: normalizedEmail, verified: false },
+      user: { id, email: normalizedEmail, role: newRole, verified: false },
       verificationURL: actionURL,
     },
     201,
@@ -484,9 +502,9 @@ superuserAuthRouter.post("/create", requireAuth, async (c) => {
 //  GET /api/superusers/list — all superusers (auth required)
 // ─────────────────────────────────────────────────────────────
 
-superuserAuthRouter.get("/list", requireAuth, async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT id, email, verified, created_at, updated_at
+superuserAuthRouter.get("/list", requireAuth, requireRole("admin"), async (c) => {
+  const { results } = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, email, role, verified, created_at, updated_at
      FROM _superusers ORDER BY created_at DESC`,
   ).all();
   return c.json({ users: results });
@@ -496,10 +514,10 @@ superuserAuthRouter.get("/list", requireAuth, async (c) => {
 //  GET /api/superusers/:id — single superuser (auth required)
 // ─────────────────────────────────────────────────────────────
 
-superuserAuthRouter.get("/:id", requireAuth, async (c) => {
+superuserAuthRouter.get("/:id", requireAuth, requireRole("admin"), async (c) => {
   const id = c.req.param("id");
-  const row = await c.env.DB.prepare(
-    `SELECT id, email, verified, created_at, updated_at
+  const row = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, email, role, verified, created_at, updated_at
      FROM _superusers WHERE id = ?`,
   )
     .bind(id)
@@ -516,7 +534,7 @@ const updateEmailSchema = z.object({
   email: z.string().email().max(254),
 });
 
-superuserAuthRouter.patch("/:id/email", requireAuth, async (c) => {
+superuserAuthRouter.patch("/:id/email", requireAuth, requireRole("admin"), async (c) => {
   const id = c.req.param("id");
 
   let body: unknown;
@@ -534,13 +552,13 @@ superuserAuthRouter.patch("/:id/email", requireAuth, async (c) => {
   const normalizedEmail = parsed.data.email.toLowerCase().trim();
 
   // Check the target exists.
-  const existing = await c.env.DB.prepare(`SELECT id FROM _superusers WHERE id = ?`)
+  const existing = await c.env.SYSTEM_DB.prepare(`SELECT id FROM _superusers WHERE id = ?`)
     .bind(id)
     .first();
   if (!existing) return c.json({ error: "not_found" }, 404);
 
   // Check email isn't taken by someone else.
-  const clash = await c.env.DB.prepare(
+  const clash = await c.env.SYSTEM_DB.prepare(
     `SELECT id FROM _superusers WHERE email = ? AND id != ?`,
   )
     .bind(normalizedEmail, id)
@@ -548,7 +566,7 @@ superuserAuthRouter.patch("/:id/email", requireAuth, async (c) => {
   if (clash) return c.json({ error: "email_already_in_use" }, 409);
 
   const now = Date.now();
-  await c.env.DB.prepare(
+  await c.env.SYSTEM_DB.prepare(
     `UPDATE _superusers SET email = ?, updated_at = ? WHERE id = ?`,
   )
     .bind(normalizedEmail, now, id)
@@ -584,7 +602,7 @@ superuserAuthRouter.patch("/:id/password", requireAuth, async (c) => {
   }
 
   // Fetch target.
-  const row = await c.env.DB.prepare(
+  const row = await c.env.SYSTEM_DB.prepare(
     `SELECT id, email, password_hash, password_salt FROM _superusers WHERE id = ?`,
   )
     .bind(id)
@@ -611,7 +629,7 @@ superuserAuthRouter.patch("/:id/password", requireAuth, async (c) => {
   const { hash, salt } = await hashPassword(parsed.data.newPassword);
   const now = Date.now();
 
-  await c.env.DB.prepare(
+  await c.env.SYSTEM_DB.prepare(
     `UPDATE _superusers SET password_hash = ?, password_salt = ?, token_key = ?, updated_at = ? WHERE id = ?`,
   )
     .bind(hash, salt, crypto.randomUUID(), now, id)
@@ -624,7 +642,7 @@ superuserAuthRouter.patch("/:id/password", requireAuth, async (c) => {
 //  DELETE /api/superusers/:id — delete a superuser (auth required)
 // ─────────────────────────────────────────────────────────────
 
-superuserAuthRouter.delete("/:id", requireAuth, async (c) => {
+superuserAuthRouter.delete("/:id", requireAuth, requireRole("admin"), async (c) => {
   const id = c.req.param("id");
   const currentUser = c.get("user");
 
@@ -633,11 +651,85 @@ superuserAuthRouter.delete("/:id", requireAuth, async (c) => {
     return c.json({ error: "cannot_delete_self" }, 400);
   }
 
-  await c.env.DB.prepare(`DELETE FROM _superusers WHERE id = ?`)
+  // Fetch target so we know their role (for the last-admin safeguard).
+  const target = await c.env.SYSTEM_DB.prepare(
+    `SELECT role FROM _superusers WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{ role: string }>();
+  if (!target) return c.json({ error: "not_found" }, 404);
+
+  // Last-admin safeguard — never let the only admin be removed.
+  if (normalizeRole(target.role) === "admin") {
+    const cnt = await c.env.SYSTEM_DB.prepare(
+      `SELECT COUNT(*) as cnt FROM _superusers WHERE role = 'admin'`,
+    ).first<{ cnt: number }>();
+    if (cnt && cnt.cnt <= 1) {
+      return c.json({ error: "cannot_delete_last_admin" }, 400);
+    }
+  }
+
+  await c.env.SYSTEM_DB.prepare(`DELETE FROM _superusers WHERE id = ?`)
     .bind(id)
     .run();
 
   return c.json({ success: true });
+});
+
+// ─────────────────────────────────────────────────────────────
+//  PATCH /api/superusers/:id/role — change a user's role (admin-only)
+// ─────────────────────────────────────────────────────────────
+
+const updateRoleSchema = z.object({
+  role: z.enum(["admin", "editor", "viewer"]),
+});
+
+superuserAuthRouter.patch("/:id/role", requireAuth, requireRole("admin"), async (c) => {
+  const id = c.req.param("id");
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  const parsed = updateRoleSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "validation_failed", issues: parsed.error.flatten() }, 400);
+  }
+
+  const newRole = parsed.data.role;
+
+  // Fetch the target.
+  const target = await c.env.SYSTEM_DB.prepare(
+    `SELECT id, role FROM _superusers WHERE id = ?`,
+  )
+    .bind(id)
+    .first<{ id: string; role: string }>();
+  if (!target) return c.json({ error: "not_found" }, 404);
+
+  // Last-admin safeguard — never demote the only admin.
+  if (normalizeRole(target.role) === "admin" && newRole !== "admin") {
+    const cnt = await c.env.SYSTEM_DB.prepare(
+      `SELECT COUNT(*) as cnt FROM _superusers WHERE role = 'admin'`,
+    ).first<{ cnt: number }>();
+    if (cnt && cnt.cnt <= 1) {
+      return c.json({ error: "cannot_demote_last_admin" }, 400);
+    }
+  }
+
+  const now = Date.now();
+  // Rotate tokenKey so the user's existing sessions must re-login.
+  // This ensures the new role takes effect immediately on the next login.
+  const newTokenKey = crypto.randomUUID();
+  await c.env.SYSTEM_DB.prepare(
+    `UPDATE _superusers SET role = ?, token_key = ?, updated_at = ? WHERE id = ?`,
+  )
+    .bind(newRole, newTokenKey, now, id)
+    .run();
+
+  return c.json({ user: { id, role: newRole, updated_at: now } });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -656,7 +748,7 @@ superuserAuthRouter.post("/bootstrap", async (c) => {
   }
 
   // Refuse if any superuser already exists.
-  const existing = await c.env.DB.prepare(`SELECT COUNT(*) as cnt FROM _superusers`)
+  const existing = await c.env.SYSTEM_DB.prepare(`SELECT COUNT(*) as cnt FROM _superusers`)
     .first<{ cnt: number }>();
   if (existing && existing.cnt > 0) {
     return c.json({ error: "bootstrap_disabled", message: "Superusers already exist." }, 403);
@@ -673,16 +765,16 @@ superuserAuthRouter.post("/bootstrap", async (c) => {
   const id = crypto.randomUUID();
   const now = Date.now();
 
-  await c.env.DB.prepare(
-    `INSERT INTO _superusers (id, email, password_hash, password_salt, token_key, verified, created_at, updated_at)
-     VALUES (?, ?, ?, ?, '', 1, ?, ?)`,
+  await c.env.SYSTEM_DB.prepare(
+    `INSERT INTO _superusers (id, email, password_hash, password_salt, token_key, role, verified, created_at, updated_at)
+     VALUES (?, ?, ?, ?, '', 'admin', 1, ?, ?)`,
   )
     .bind(id, normalizedEmail, hash, salt, now, now)
     .run();
 
-  const token = await signToken({ sub: id, email: normalizedEmail }, c.env.AUTH_SECRET);
+  const token = await signToken({ sub: id, email: normalizedEmail, role: "admin" }, c.env.AUTH_SECRET);
   return c.json(
-    { user: { id, email: normalizedEmail, verified: true }, token },
+    { user: { id, email: normalizedEmail, role: "admin", verified: true }, token },
     201,
   );
 });

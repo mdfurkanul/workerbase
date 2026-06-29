@@ -17,10 +17,10 @@ import {
   User,
   X,
 } from "lucide-react";
-import { SYSTEM_LINKS, APP_VERSION } from "@/lib/mockData";
+import { APP_VERSION } from "@/lib/mockData";
 import type { Collection } from "@/lib/mockData";
 import { collectionTypeMeta } from "@/lib/collectionTypes";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, isAdmin } from "@/hooks/useAuth";
 import { useCollections } from "@/hooks/useCollections";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
 import { getPinnedCollections, togglePinned } from "@/lib/collectionStore";
@@ -75,6 +75,9 @@ function TopBar() {
     );
   };
 
+  const roleLabel =
+    user?.role === "admin" ? "Admin" : user?.role === "editor" ? "Editor" : "Viewer";
+
   return (
     <header className="bg-brand text-white">
       <div className="px-4 h-11 flex items-center justify-between gap-4">
@@ -91,6 +94,7 @@ function TopBar() {
             {navItem("/api-preview", "API", <Code2 size={14} />)}
             {navItem("/logs", "Logs", <Terminal size={14} />)}
             {navItem("/sql", "SQL", <FileText size={14} />)}
+            {isAdmin(user) && navItem("/users", "Users", <User size={14} />)}
             {navItem("/settings", "Settings", <SettingsIcon size={14} />)}
           </nav>
         </div>
@@ -127,7 +131,7 @@ function TopBar() {
                     <div className="text-[12px] text-ink-muted">Signed in as</div>
                     <div className="text-[13px] truncate">{user?.email}</div>
                     <div className="label-mono mt-1">
-                      {user?.role === "superuser" ? "Superuser" : "Operator"}
+                      {roleLabel}
                     </div>
                   </div>
                   <Link
@@ -167,6 +171,7 @@ function CloudflareMark() {
 /* ─── Sidebar ──────────────────────────────────────────────────────── */
 function Sidebar() {
   const { collections, loading, error } = useCollections();
+  const { user } = useAuth();
   const [query, setQuery] = useState("");
   const [pinned, setPinned] = useState<string[]>(() => getPinnedCollections());
   const [systemOpen, setSystemOpen] = useState(true);
@@ -180,8 +185,9 @@ function Sidebar() {
   }, [collections, query]);
 
   // Split into user collections (top) vs system tables (bottom group).
-  const SYSTEM_NAMES = new Set(SYSTEM_LINKS.map((s) => s.name));
-  const isSystemName = (name: string) => name.startsWith("_") || SYSTEM_NAMES.has(name) || name === "logs";
+  // System tables are anything starting with "_" (e.g. _superusers,
+  // _externalAuths) plus the "logs" table.
+  const isSystemName = (name: string) => name.startsWith("_") || name === "logs";
 
   const userCollections = filtered.filter((c) => !isSystemName(c.name));
   const systemCollections = filtered.filter((c) => isSystemName(c.name));
@@ -208,9 +214,11 @@ function Sidebar() {
           >
             <Network size={14} />
           </button>
-          <Link to="/collections/new" className="btn-icon" title="New collection">
-            <Plus size={14} />
-          </Link>
+          {isAdmin(user) && (
+            <Link to="/collections/new" className="btn-icon" title="New collection">
+              <Plus size={14} />
+            </Link>
+          )}
         </div>
       </div>
 

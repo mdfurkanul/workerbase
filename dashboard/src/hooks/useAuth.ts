@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGetMe } from "@/lib/api-superusers";
 import { getToken, clearToken } from "@/lib/api-client";
-import type { Superuser } from "@/lib/api-types";
+import type { Superuser, SuperuserRole } from "@/lib/api-types";
 
-/** Extended user type with role for UI compatibility. */
-export interface AuthUser extends Superuser {
-  role: "superuser" | "operator";
-}
+/** Authenticated user — extends Superuser with the role used for UI gating. */
+export type AuthUser = Superuser;
 
 interface UseAuth {
   user: AuthUser | null;
@@ -29,7 +27,7 @@ export function useAuth(): UseAuth {
       return;
     }
     apiGetMe()
-      .then((res) => setUser({ ...res.user, role: "superuser" as const }))
+      .then((res) => setUser(res.user))
       .catch(() => {
         clearToken();
         setUser(null);
@@ -45,4 +43,21 @@ export function useAuth(): UseAuth {
   }, []);
 
   return { user, loading, setUser, logout };
+}
+
+/* ─── Role predicates ────────────────────────────────────────────── */
+
+/** True if the user has the `admin` role (full power). */
+export function isAdmin(user: { role: SuperuserRole } | null | undefined): boolean {
+  return user?.role === "admin";
+}
+
+/** True if the user may edit records (admin or editor). */
+export function canEdit(user: { role: SuperuserRole } | null | undefined): boolean {
+  return user?.role === "admin" || user?.role === "editor";
+}
+
+/** True if the user may manage dashboard users (admin only). */
+export function canManageUsers(user: { role: SuperuserRole } | null | undefined): boolean {
+  return user?.role === "admin";
 }

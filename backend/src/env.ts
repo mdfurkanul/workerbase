@@ -3,8 +3,10 @@
  * Bound via wrangler.jsonc — keep these names in sync.
  */
 export interface Env {
-  /** D1 — primary metadata + dynamic tenant tables. */
+  /** D1 — user-created collection tables (workerbase data schema). */
   DB: D1Database;
+  /** D1 — system tables: _superusers, _collections, _tokens, _logs, etc. (system schema). */
+  SYSTEM_DB: D1Database;
   /** R2 — blob / file storage. */
   STORAGE: R2Bucket;
   /** Durable Objects — one RealtimeHub instance per collection name. */

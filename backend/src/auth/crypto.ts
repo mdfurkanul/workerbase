@@ -6,6 +6,8 @@
  * available natively in the Cloudflare Workers runtime.
  */
 
+import type { SuperuserRole } from "../db/schema.js";
+
 const PBKDF2_ITERATIONS = 100_000;
 const PBKDF2_KEYLEN = 32; // 256-bit hash
 const SALT_LEN = 16;
@@ -110,6 +112,7 @@ async function importHmacKey(secret: string): Promise<CryptoKey> {
 export interface TokenPayload {
   sub: string; // user id
   email: string;
+  role: SuperuserRole; // dashboard RBAC role
   iat: number; // issued at (seconds)
   exp: number; // expiry (seconds)
 }
@@ -182,7 +185,13 @@ export async function verifyToken(token: string, secret: string): Promise<TokenP
   }
   if (typeof payload.sub !== "string" || payload.sub.length === 0) return null;
 
-  return payload;
+  // Normalize a missing role claim (tokens issued before RBAC rollout)
+  // to "admin" — the migration backfills all existing superusers to admin.
+  const role: SuperuserRole =
+    payload.role === "admin" || payload.role === "editor" || payload.role === "viewer"
+      ? payload.role
+      : "admin";
+  return { ...payload, role };
 }
 
 // ─────────────────────────────────────────────────────────────
