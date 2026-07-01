@@ -10,6 +10,8 @@ interface Props {
   recordId: string | null;
   schema?: { name: string; type: string }[];
   snapshot?: { key: string; value: unknown }[];
+  /** When true, hide Edit/Delete actions (e.g. read-only system tables). */
+  readOnly?: boolean;
   onClose: () => void;
   onChanged?: () => void;
 }
@@ -29,11 +31,12 @@ export default function RecordDrawer({
   recordId,
   schema = [],
   snapshot,
+  readOnly = false,
   onClose,
   onChanged,
 }: Props) {
   const { user } = useAuth();
-  const allowEdit = canEdit(user);
+  const allowEdit = canEdit(user) && !readOnly;
   const [record, setRecord] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [editMode, setEditMode] = useState(false);

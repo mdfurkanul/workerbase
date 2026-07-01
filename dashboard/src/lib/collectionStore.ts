@@ -1,22 +1,16 @@
 /**
- * Local-storage-backed overrides for collection metadata.
+ * Local-storage-backed UI state for collections.
  *
- * This is a UI-only stand-in for the real `PATCH /api/collections/:name`
- * and `DELETE /api/collections/:name` endpoints. The hook merges these
- * drafts over the JSON-loaded index so the dashboard behaves correctly
- * while the backend is still being wired.
- *
- * Swap out the function bodies for fetch calls once the API lands.
+ * The backend (sqlite_master + PRAGMA table_info) is the SINGLE source of
+ * truth for the collection list, names, and schemas. Nothing in this file
+ * filters, adds, or renames collections. Only genuine per-user UI
+ * preferences live here: pinned collections, visible-column choices, and
+ * permission-rule drafts.
  */
 
-import type { Collection, CollectionField } from "@/lib/mockData";
-
-const DELETED_KEY = "workerbase.deletedCollections";
-const SCHEMA_PREFIX = "workerbase.schema.";
-const NAME_PREFIX = "workerbase.name.";
-const PERMISSIONS_PREFIX = "workerbase.permissions.";
 const PINNED_KEY = "workerbase.pinnedCollections";
 const COLUMNS_PREFIX = "workerbase.columns.";
+const PERMISSIONS_PREFIX = "workerbase.permissions.";
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -36,79 +30,7 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
-/* ─── Deleted collections ──────────────────────────────────────────── */
-export function getDeletedCollections(): string[] {
-  return readJson<string[]>(DELETED_KEY, []);
-}
-
-export function isDeleted(name: string): boolean {
-  return getDeletedCollections().includes(name);
-}
-
-export function markDeleted(name: string): void {
-  const list = getDeletedCollections();
-  if (!list.includes(name)) {
-    list.push(name);
-    writeJson(DELETED_KEY, list);
-  }
-}
-
-export function unmarkDeleted(name: string): void {
-  const list = getDeletedCollections().filter((n) => n !== name);
-  writeJson(DELETED_KEY, list);
-}
-
-/* ─── Edited schemas ───────────────────────────────────────────────── */
-function schemaKey(name: string): string {
-  return `${SCHEMA_PREFIX}${name}`;
-}
-
-export function getEditedSchema(name: string): CollectionField[] | null {
-  return readJson<CollectionField[] | null>(schemaKey(name), null);
-}
-
-export function saveEditedSchema(name: string, schema: CollectionField[]): void {
-  writeJson(schemaKey(name), schema);
-}
-
-/* ─── Edited names ─────────────────────────────────────────────────── */
-function nameKey(name: string): string {
-  return `${NAME_PREFIX}${name}`;
-}
-
-export function getEditedName(name: string): string | null {
-  return readJson<string | null>(nameKey(name), null);
-}
-
-export function setEditedName(originalName: string, newName: string): void {
-  writeJson(nameKey(originalName), newName);
-}
-
-export function clearEditedSchema(name: string): void {
-  try {
-    localStorage.removeItem(schemaKey(name));
-  } catch {
-    /* ignore */
-  }
-}
-
-/* ─── Merge helper for the hook ────────────────────────────────────── */
-export function applyOverrides(collections: Collection[]): Collection[] {
-  const deleted = new Set(getDeletedCollections());
-  return collections
-    .filter((c) => !deleted.has(c.name))
-    .map((c) => {
-      const edited = getEditedSchema(c.name);
-      const editedName = getEditedName(c.name);
-      return {
-        ...c,
-        name: editedName ?? c.name,
-        schema: edited ?? c.schema,
-      };
-    });
-}
-
-/* ─── Permissions (also persisted locally) ─────────────────────────── */
+/* ─── Permissions (per-collection, persisted locally) ─────────────── */
 export function loadPermissions<T>(name: string, fallback: T): T {
   return readJson<T>(`${PERMISSIONS_PREFIX}${name}`, fallback);
 }
@@ -117,7 +39,7 @@ export function savePermissions<T>(name: string, value: T): void {
   writeJson(`${PERMISSIONS_PREFIX}${name}`, value);
 }
 
-/* ─── Pinned collections ───────────────────────────────────────────── */
+/* ─── Pinned collections ──────────────────────────────────────────── */
 export function getPinnedCollections(): string[] {
   return readJson<string[]>(PINNED_KEY, []);
 }

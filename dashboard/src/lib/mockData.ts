@@ -20,6 +20,7 @@ export interface Collection {
   type: CollectionType;
   count: number;
   schema: CollectionField[];
+  source: "system" | "data";
   query?: string | null;
   list_rule?: string | null;
   create_rule?: string | null;

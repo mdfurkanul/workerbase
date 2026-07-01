@@ -207,7 +207,7 @@ sqlQueriesRouter.post("/execute", requireAuth, async (c) => {
   }
 
   try {
-    const result = await c.env.DB.prepare(sql).all();
+    const result = await c.env.SYSTEM_DB.prepare(sql).all();
 
     // Extract column names from the first row (D1 returns objects).
     const rows = result.results ?? [];

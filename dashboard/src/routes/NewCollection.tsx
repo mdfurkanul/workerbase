@@ -24,6 +24,7 @@ import {
 } from "@/lib/fieldTypes";
 import type { CollectionType } from "@/lib/mockData";
 import { collectionNameSchema } from "@/lib/validation";
+import { useCollections } from "@/hooks/useCollections";
 
 /* ─── Types ──────────────────────────────────────────────────────── */
 interface FieldOpts {
@@ -120,6 +121,7 @@ function blankField(type: FieldType): Field {
 
 export default function NewCollection() {
   const navigate = useNavigate();
+  const { refresh: refreshCollections } = useCollections();
   const [name, setName] = useState("");
   const [type, setType] = useState<CollectionType>("base");
   const [viewQuery, setViewQuery] = useState("");
@@ -272,6 +274,7 @@ export default function NewCollection() {
     try {
       const { apiClient } = await import("@/lib/api-client");
       await apiClient.post(`/api/core/collections`, payload);
+      await refreshCollections();
       navigate(name ? `/collections?collections=${encodeURIComponent(name)}` : "/collections");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to create collection";

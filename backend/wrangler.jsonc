@@ -18,12 +18,7 @@
       "binding": "SYSTEM_DB",
       "database_name": "workerbase-system",
       "database_id": "local",
-      "migrations_dir": "migrations/system"
-    },
-    {
-      "binding": "DB",
-      "database_name": "workerbase-data",
-      "database_id": "local"
+      "migrations_dir": "migrations"
     }
   ],
 
@@ -52,12 +47,7 @@
           "binding": "SYSTEM_DB",
           "database_name": "workerbase-system-local",
           "database_id": "local",
-          "migrations_dir": "migrations/system"
-        },
-        {
-          "binding": "DB",
-          "database_name": "workerbase-data-local",
-          "database_id": "local"
+          "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [
@@ -74,12 +64,7 @@
           "binding": "SYSTEM_DB",
           "database_name": "workerbase-system-preprod",
           "database_id": "REPLACE_WITH_PREPROD_SYSTEM_D1_ID",
-          "migrations_dir": "migrations/system"
-        },
-        {
-          "binding": "DB",
-          "database_name": "workerbase-data-preprod",
-          "database_id": "REPLACE_WITH_PREPROD_DATA_D1_ID"
+          "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [
@@ -96,12 +81,7 @@
           "binding": "SYSTEM_DB",
           "database_name": "workerbase-system-prod",
           "database_id": "REPLACE_WITH_PROD_SYSTEM_D1_ID",
-          "migrations_dir": "migrations/system"
-        },
-        {
-          "binding": "DB",
-          "database_name": "workerbase-data-prod",
-          "database_id": "REPLACE_WITH_PROD_DATA_D1_ID"
+          "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [

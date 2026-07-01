@@ -3,9 +3,11 @@
  * Bound via wrangler.jsonc — keep these names in sync.
  */
 export interface Env {
-  /** D1 — user-created collection tables (workerbase data schema). */
-  DB: D1Database;
-  /** D1 — system tables: _superusers, _collections, _tokens, _logs, etc. (system schema). */
+  /**
+   * D1 — the single WorkerBase database. Holds both system tables
+   * (underscore-prefixed: _superusers, _tokens, _collections, _logs, …)
+   * and user-created collection tables (which must NOT start with `_`).
+   */
   SYSTEM_DB: D1Database;
   /** R2 — blob / file storage. */
   STORAGE: R2Bucket;

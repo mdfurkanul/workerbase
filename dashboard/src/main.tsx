@@ -13,6 +13,7 @@ import SqlConsole from "@/routes/SqlConsole";
 import Settings from "@/routes/Settings";
 import Users from "@/routes/Users";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import { CollectionsProvider } from "@/hooks/useCollections";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -29,6 +30,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           path="/*"
           element={
             <ProtectedRoute>
+              <CollectionsProvider>
               <Routes>
                 <Route path="/" element={<Overview />} />
                 {/* New-collection flow stays on its own path. */}
@@ -45,6 +47,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
+              </CollectionsProvider>
             </ProtectedRoute>
           }
         />

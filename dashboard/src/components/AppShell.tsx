@@ -94,7 +94,6 @@ function TopBar() {
             {navItem("/api-preview", "API", <Code2 size={14} />)}
             {navItem("/logs", "Logs", <Terminal size={14} />)}
             {navItem("/sql", "SQL", <FileText size={14} />)}
-            {isAdmin(user) && navItem("/users", "Users", <User size={14} />)}
             {navItem("/settings", "Settings", <SettingsIcon size={14} />)}
           </nav>
         </div>
@@ -185,12 +184,10 @@ function Sidebar() {
   }, [collections, query]);
 
   // Split into user collections (top) vs system tables (bottom group).
-  // System tables are anything starting with "_" (e.g. _superusers,
-  // _externalAuths) plus the "logs" table.
-  const isSystemName = (name: string) => name.startsWith("_") || name === "logs";
-
-  const userCollections = filtered.filter((c) => !isSystemName(c.name));
-  const systemCollections = filtered.filter((c) => isSystemName(c.name));
+  // The backend tags every table with `source: "system" | "data"` based on
+  // which D1 database it lives in (workerbase-system vs workerbase-data).
+  const userCollections = filtered.filter((c) => c.source !== "system");
+  const systemCollections = filtered.filter((c) => c.source === "system");
 
   const pinnedSet = new Set(pinned);
   const pinnedList = userCollections.filter((c) => pinnedSet.has(c.name));

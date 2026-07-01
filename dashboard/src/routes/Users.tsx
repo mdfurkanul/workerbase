@@ -4,6 +4,7 @@ import { Loader2, Trash2, UserPlus } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 import Modal from "@/components/Modal";
 import { useAuth, isAdmin } from "@/hooks/useAuth";
+import { useCollections } from "@/hooks/useCollections";
 import {
   apiCreateSuperuser,
   apiDeleteUser,
@@ -21,7 +22,19 @@ function formatDate(ms?: number): string {
 }
 
 export default function Users() {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, loading } = useAuth();
+
+  // Wait for auth to load before deciding — otherwise a momentary `null`
+  // user during navigation would trip the redirect.
+  if (loading) {
+    return (
+      <AppShell>
+        <div className="flex-1 flex items-center justify-center text-ink-muted text-[13px]">
+          <Loader2 size={16} className="animate-spin text-brand mr-2" /> Loading…
+        </div>
+      </AppShell>
+    );
+  }
 
   // Non-admins shouldn't reach this page (nav link is hidden) — but if they
   // type the URL directly, bounce them home rather than rendering a 403 wall.
@@ -34,6 +47,7 @@ export default function Users() {
 
 function UsersAdmin() {
   const { user: currentUser } = useAuth();
+  const { refresh: refreshCollections } = useCollections();
   const [users, setUsers] = useState<Superuser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +89,7 @@ function UsersAdmin() {
     setBusy(true);
     try {
       const res = await apiCreateSuperuser(email.trim(), password, role);
+      void refreshCollections();
       setInviteMsg(
         `Invited ${res.user.email} as ${res.user.role}. A verification link has been generated.`,
       );
@@ -108,6 +123,7 @@ function UsersAdmin() {
     setDeleteError(null);
     try {
       await apiDeleteUser(deleteTarget.id);
+      void refreshCollections();
       setDeleteTarget(null);
       await load();
     } catch (err) {

@@ -236,7 +236,7 @@ collectionsRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
 
   // 2. Issue DDL.
   try {
-    await c.env.DB.exec(ddl);
+    await c.env.SYSTEM_DB.exec(ddl);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: "ddl_failed", detail: msg, ddl }, 500);
@@ -250,7 +250,7 @@ collectionsRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
       const cols = idx.columns.map((col) => `"${col}"`).join(", ");
       const uniqueKw = idx.unique ? "UNIQUE " : "";
       try {
-        await c.env.DB.exec(`${uniqueKw}INDEX IF NOT EXISTS "${idx.name}" ON "${spec.name}" (${cols})`);
+        await c.env.SYSTEM_DB.exec(`${uniqueKw}INDEX IF NOT EXISTS "${idx.name}" ON "${spec.name}" (${cols})`);
       } catch {
         // Index creation failure is non-fatal.
       }
@@ -274,13 +274,87 @@ collectionsRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
 });
 
 collectionsRouter.get("/", requireAuth, async (c) => {
-  const { results } = await c.env.SYSTEM_DB.prepare(
-    `SELECT id, name, type, schema, query, indexes, constraints,
-            list_rule, view_rule, create_rule, update_rule, delete_rule,
-            auth_config, email_templates, created_at, updated_at
-     FROM _collections ORDER BY name`,
+  // Tables we never want to surface in the dashboard list — framework
+  // bookkeeping and the legacy `_collections` registry (no longer used
+  // for listing; tables are enumerated from sqlite_master directly).
+  const HIDDEN = new Set([
+    "_collections",
+    "_db_migrations",
+    "d1_migrations",
+    "sqlite_sequence",
+    "_cf_METADATA",
+  ]);
+
+  // System tables live in SYSTEM_DB and are underscore-prefixed.
+  const sysRes = await c.env.SYSTEM_DB.prepare(
+    `SELECT name FROM sqlite_master
+     WHERE type='table' AND name LIKE '\\_%' ESCAPE '\\'
+     ORDER BY name`,
   ).all();
-  return c.json({ collections: results });
+
+  // User collections live in DB (the data database).
+  const dataRes = await c.env.SYSTEM_DB.prepare(
+    `SELECT name FROM sqlite_master
+     WHERE type='table'
+       AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
+       AND name NOT LIKE '\\_%' ESCAPE '\\'
+     ORDER BY name`,
+  ).all();
+
+  const sysNames = (sysRes.results ?? [])
+    .map((r) => (r as { name: string }).name)
+    .filter((n) => !HIDDEN.has(n));
+  const dataNames = (dataRes.results ?? [])
+    .map((r) => (r as { name: string }).name)
+    .filter((n) => !HIDDEN.has(n));
+
+  // Helper: fetch live column list for a table via PRAGMA.
+  // Names come straight from sqlite_master so they're safe to inline,
+  // but we still assert they match a strict identifier shape.
+  const fetchSchema = async (
+    db: D1Database,
+    name: string,
+  ): Promise<{ name: string; type: string }[]> => {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) return [];
+    try {
+      const { results } = await db.prepare(`PRAGMA table_info("${name}")`).all();
+      return (results ?? [])
+        .filter((r) => typeof (r as { name?: unknown }).name === "string")
+        .map((r) => {
+          const row = r as { name: string; type?: string };
+          return { name: row.name, type: (row.type || "text").toLowerCase() };
+        });
+    } catch {
+      return [];
+    }
+  };
+
+  const buildEntries = async (
+    names: string[],
+    source: "system" | "data",
+  ) =>
+    Promise.all(
+      names.map(async (name) => {
+        const db = c.env.SYSTEM_DB;
+        const schema = await fetchSchema(db, name);
+        return {
+          id: `${source}__${name}`,
+          name,
+          type: source === "system" ? "system" : "base",
+          source,
+          schema,
+          count: 0,
+        };
+      }),
+    );
+
+  const collections = [
+    ...(await buildEntries(dataNames, "data")),
+    ...(await buildEntries(sysNames, "system")),
+  ];
+  collections.sort((a, b) => a.name.localeCompare(b.name));
+
+  return c.json({ collections });
 });
 
 collectionsRouter.get("/:name", requireAuth, async (c) => {
@@ -288,14 +362,41 @@ collectionsRouter.get("/:name", requireAuth, async (c) => {
   if (!NAME_RE.test(name) && !name.startsWith("_")) {
     return c.json({ error: "invalid collection name" }, 400);
   }
-  const row = await c.env.SYSTEM_DB.prepare(
-    `SELECT id, name, type, schema, query, indexes, constraints,
-            list_rule, view_rule, create_rule, update_rule, delete_rule,
-            auth_config, email_templates, created_at, updated_at
-     FROM _collections WHERE name = ?`,
-  ).bind(name).first();
-  if (!row) return c.json({ error: "not found" }, 404);
-  return c.json({ collection: row });
+
+  const source: "system" | "data" = name.startsWith("_") ? "system" : "data";
+  const db = c.env.SYSTEM_DB;
+
+  // Confirm the table actually exists.
+  const exists = await db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`)
+    .bind(name)
+    .first<{ name: string }>();
+  if (!exists) return c.json({ error: "not found" }, 404);
+
+  // Derive schema live via PRAGMA.
+  let schema: { name: string; type: string }[] = [];
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    try {
+      const { results } = await db.prepare(`PRAGMA table_info("${name}")`).all();
+      schema = (results ?? [])
+        .filter((r) => typeof (r as { name?: unknown }).name === "string")
+        .map((r) => {
+          const row = r as { name: string; type?: string };
+          return { name: row.name, type: (row.type || "text").toLowerCase() };
+        });
+    } catch { /* leave schema empty */ }
+  }
+
+  return c.json({
+    collection: {
+      id: `${source}__${name}`,
+      name,
+      type: source === "system" ? "system" : "base",
+      source,
+      schema,
+      count: 0,
+    },
+  });
 });
 
 /* ── GET /api/collections/:name/records — paginated records ── */
@@ -311,21 +412,26 @@ collectionsRouter.get("/:name/records", requireAuth, async (c) => {
   const offset = (page - 1) * perPage;
 
   try {
-    // Check if this is a view (views don't have rowid).
-    const typeRow = await c.env.SYSTEM_DB.prepare(
-      `SELECT type FROM _collections WHERE name = ?`,
-    ).bind(name).first<{ type: string }>();
+    // Route to the correct DB: system tables (underscore-prefixed) live in
+    // SYSTEM_DB, user collections live in DB.
+    const db = c.env.SYSTEM_DB;
+
+    // Detect views via sqlite_master (views don't have rowid).
+    const typeRow = await db
+      .prepare(`SELECT type FROM sqlite_master WHERE type IN ('table','view') AND name = ?`)
+      .bind(name)
+      .first<{ type: string }>();
     const isView = typeRow?.type === "view";
 
     // Get total count.
-    const countRow = await c.env.DB.prepare(
+    const countRow = await db.prepare(
       `SELECT COUNT(*) as total FROM "${name}"`,
     ).first<{ total: number }>();
     const total = countRow?.total ?? 0;
 
     // Get the page of records — views don't have rowid so use a simple LIMIT/OFFSET.
     const orderBy = isView ? "LIMIT ? OFFSET ?" : "ORDER BY rowid DESC LIMIT ? OFFSET ?";
-    const { results } = await c.env.DB.prepare(
+    const { results } = await db.prepare(
       `SELECT * FROM "${name}" ${orderBy}`,
     ).bind(perPage, offset).all();
 
@@ -356,25 +462,22 @@ collectionsRouter.delete("/:name", requireAuth, requireRole("admin"), async (c) 
     return c.json({ error: "invalid collection name" }, 400);
   }
 
-  // 1. Check the collection exists.
+  // 1. Check the collection actually exists in the data DB.
   const row = await c.env.SYSTEM_DB.prepare(
-    `SELECT id, type FROM _collections WHERE name = ?`,
-  ).bind(name).first<{ id: string; type: string }>();
+    `SELECT type FROM sqlite_master WHERE type IN ('table','view') AND name = ?`,
+  ).bind(name).first<{ type: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
 
   // 2. Drop the physical table (or view).
   try {
     if (row.type === "view") {
-      await c.env.DB.exec(`DROP VIEW IF EXISTS "${name}"`);
+      await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${name}"`);
     } else {
-      await c.env.DB.exec(`DROP TABLE IF EXISTS "${name}"`);
+      await c.env.SYSTEM_DB.exec(`DROP TABLE IF EXISTS "${name}"`);
     }
   } catch {
     // Non-fatal — the table might already be gone.
   }
-
-  // 3. Delete the metadata row.
-  await c.env.SYSTEM_DB.prepare(`DELETE FROM _collections WHERE id = ?`).bind(row.id).run();
 
   return c.json({ success: true });
 });
@@ -410,11 +513,13 @@ collectionsRouter.post("/:name/records", requireAuth, requireRole("admin", "edit
   const values = cols.map((k) => data[k]);
 
   try {
-    await c.env.DB.prepare(
+    const db = c.env.SYSTEM_DB;
+
+    await db.prepare(
       `INSERT INTO "${name}" (${colNames}) VALUES (${placeholders})`,
     ).bind(...values).run();
 
-    const row = await c.env.DB.prepare(
+    const row = await db.prepare(
       `SELECT * FROM "${name}" WHERE id = ?`,
     ).bind(id).first();
 
@@ -456,11 +561,13 @@ collectionsRouter.patch("/:name/records/:id", requireAuth, requireRole("admin", 
   }
 
   try {
-    await c.env.DB.prepare(
+    const db = c.env.SYSTEM_DB;
+
+    await db.prepare(
       `UPDATE "${name}" SET ${sets.join(", ")} WHERE id = ?`,
     ).bind(...values, recordId).run();
 
-    const row = await c.env.DB.prepare(
+    const row = await db.prepare(
       `SELECT * FROM "${name}" WHERE id = ?`,
     ).bind(recordId).first();
 
@@ -486,7 +593,8 @@ collectionsRouter.delete("/:name/records/:id", requireAuth, requireRole("admin",
   }
 
   try {
-    await c.env.DB.prepare(
+    const db = c.env.SYSTEM_DB;
+    await db.prepare(
       `DELETE FROM "${name}" WHERE id = ?`,
     ).bind(recordId).run();
     return c.json({ success: true });

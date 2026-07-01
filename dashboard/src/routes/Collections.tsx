@@ -17,8 +17,26 @@ import { useCollections } from "@/hooks/useCollections";
 import { useAuth, isAdmin, canEdit } from "@/hooks/useAuth";
 import { type Record as Row, type Collection } from "@/lib/mockData";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
-import { getVisibleColumns, setVisibleColumns, saveEditedSchema, setEditedName, markDeleted } from "@/lib/collectionStore";
+import { getVisibleColumns, setVisibleColumns } from "@/lib/collectionStore";
 import { apiClient } from "@/lib/api-client";
+
+/**
+ * System tables are read-only in the collection view. Their records are
+ * managed exclusively through dedicated admin pages:
+ *
+ *   `_superusers` → /users  (proper password hashing, role assignment,
+ *                            token-key rotation via the superusers API)
+ *   `_tokens`     → managed by the auth flows (magic-link / reset)
+ *   `_logs`       → append-only by the request logger
+ *   etc.
+ *
+ * Attempting to add/edit a system-table row through the generic records
+ * endpoint would skip hashing, salting, and bookkeeping — so we hide the
+ * affordances entirely and point users at the right tool.
+ */
+function collectionAllowsRecordEdits(name: string): boolean {
+  return !name.startsWith("_");
+}
 
 /**
  * Single router for every collection URL. The sub-view is chosen by
@@ -146,15 +164,11 @@ function CollectionView({ name }: { name: string }) {
     setDeleting(true);
     try {
       await apiClient.del(`/api/core/collections/${encodeURIComponent(name)}`);
-      markDeleted(name);
-      void refresh();
-      navigate("/collections");
     } catch {
-      // If the API fails, fall back to local-only delete
-      markDeleted(name);
+      // ignore — the refresh below will reflect the true DB state
+    } finally {
       void refresh();
       navigate("/collections");
-    } finally {
       setDeleting(false);
       setDeleteOpen(false);
       setDeleteTyped("");
@@ -190,17 +204,26 @@ function CollectionView({ name }: { name: string }) {
 
   return (
     <AppShell>
-      <PageHeader breadcrumbs={[<Link to="/collections" className="hover:text-ink">Collections</Link>, <span className="font-mono">{name}</span>]} />
+      <PageHeader
+        breadcrumbs={[<Link to="/collections" className="hover:text-ink">Collections</Link>, <span className="font-mono">{name}</span>]}
+        actions={
+          collection.name === "_superusers" && isAdmin(user) ? (
+            <Link to="/users" className="btn-primary text-[12px]">
+              <Plus size={13} /> Add user
+            </Link>
+          ) : undefined
+        }
+      />
       <CollectionHeader
         name={collection.name}
         type={collection.type}
         count={collection.count}
         onReload={reload}
         reloading={loading}
-        onEdit={isAdmin(user) ? () => openSlide("edit") : undefined}
-        onSettings={isAdmin(user) ? () => openSlide("settings") : undefined}
+        onEdit={!collection.source || collection.source !== "system" && isAdmin(user) ? () => openSlide("edit") : undefined}
+        onSettings={!collection.source || collection.source !== "system" && isAdmin(user) ? () => openSlide("settings") : undefined}
         onDelete={
-          isAdmin(user) && !(name.startsWith("_") || name === "logs")
+          isAdmin(user) && collection.source !== "system"
             ? () => setDeleteOpen(true)
             : undefined
         }
@@ -209,7 +232,11 @@ function CollectionView({ name }: { name: string }) {
         key={tick}
         collectionName={collection.name}
         schema={collection.schema}
-        onNewRecord={canEdit(user) ? () => openSlide("new") : undefined}
+        onNewRecord={
+          canEdit(user) && collectionAllowsRecordEdits(collection.name)
+            ? () => openSlide("new")
+            : undefined
+        }
       />
 
       {/* Slide-over panels */}
@@ -648,6 +675,7 @@ function RecordsTable({
         recordId={drawerRow?.id ?? null}
         schema={allColumns}
         snapshot={drawerSnapshot}
+        readOnly={!collectionAllowsRecordEdits(collectionName)}
         onClose={() => setDrawerRow(null)}
         onChanged={() => setReloadKey((k) => k + 1)}
       />
@@ -655,7 +683,11 @@ function RecordsTable({
       <SelectionBar
         count={selectedIds.size}
         onClear={clearSelection}
-        onDelete={canEdit(user) ? () => setConfirmOpen(true) : undefined}
+        onDelete={
+          canEdit(user) && collectionAllowsRecordEdits(collectionName)
+            ? () => setConfirmOpen(true)
+            : undefined
+        }
         onDownload={handleDownload}
       />
 
@@ -736,16 +768,9 @@ function EditPanel({
   });
 
   function handleSave() {
-    const data = schemaData.current;
-    // Persist schema overrides (only fields with names).
-    const cleanSchema = data.fields
-      .filter((f) => f.name)
-      .map((f) => ({ name: f.name, type: f.type }));
-    saveEditedSchema(collection.name, cleanSchema);
-    // Persist name override (if changed).
-    if (name !== collection.name) {
-      setEditedName(collection.name, name);
-    }
+    // NOTE: schema/name edits are not yet persisted to the backend (no
+    // PATCH /api/core/collections/:name endpoint). The schema editor
+    // remains in the UI as a draft view; onSaved() just closes the panel.
     onSaved();
   }
 
