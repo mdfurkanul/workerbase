@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, Trash2, X, Check, Pencil } from "lucide-react";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, ApiError } from "@/lib/api-client";
 import { useAuth, canEdit } from "@/hooks/useAuth";
 import Modal from "@/components/Modal";
 
@@ -174,7 +174,25 @@ export default function RecordDrawer({
       setEditMode(false);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      if (err instanceof ApiError) {
+        const body = err.detail as
+          | { fieldErrors?: Record<string, string>; detail?: string }
+          | string
+          | null;
+        if (body && typeof body === "object" && body.fieldErrors) {
+          setEditErrors(body.fieldErrors);
+          const count = Object.keys(body.fieldErrors).length;
+          setError(
+            `${count} field${count === 1 ? "" : "s"} failed validation — see inline errors.`,
+          );
+        } else {
+          const detail =
+            typeof body === "string" ? body : body?.detail ?? err.message;
+          setError(detail ?? "Failed to save");
+        }
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to save");
+      }
     } finally {
       setSaving(false);
     }
