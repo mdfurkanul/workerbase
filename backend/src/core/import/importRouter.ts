@@ -78,15 +78,35 @@ const AUTH_COLUMNS = [
 function renderCreateTable(
   name: string,
   fields: { name: string; type: string; required?: boolean; unique?: boolean; default?: string | number | boolean | null }[],
+  opts: {
+    addIdPk?: boolean;        // include `"id" TEXT PRIMARY KEY` (auto UUID)
+    primaryKeyColumn?: string; // alternative: a source column marked as PK
+    addCreatedAt?: boolean;
+    addUpdatedAt?: boolean;
+  } = {},
 ): string {
   assertIdentifier(name);
-  const body = [
-    '"id" TEXT PRIMARY KEY',
-    ...fields.map(renderColumnDef),
-    '"created_at" INTEGER NOT NULL DEFAULT (unixepoch())',
-    '"updated_at" INTEGER NOT NULL DEFAULT (unixepoch())',
-  ].join(", ");
-  return `CREATE TABLE IF NOT EXISTS "${name}" (${body})`;
+  const parts: string[] = [];
+
+  // Primary key strategy: either auto-id column, or one of the source columns.
+  if (opts.addIdPk) {
+    parts.push('"id" TEXT PRIMARY KEY');
+  }
+  for (const f of fields) {
+    const col = renderColumnDef(f);
+    if (opts.primaryKeyColumn === f.name) {
+      parts.push(`${col} PRIMARY KEY`);
+    } else {
+      parts.push(col);
+    }
+  }
+  if (opts.addCreatedAt) {
+    parts.push('"created_at" INTEGER NOT NULL DEFAULT (unixepoch())');
+  }
+  if (opts.addUpdatedAt) {
+    parts.push('"updated_at" INTEGER NOT NULL DEFAULT (unixepoch())');
+  }
+  return `CREATE TABLE IF NOT EXISTS "${name}" (${parts.join(", ")})`;
 }
 
 /* ── Zod body schema ─────────────────────────────────────────────── */
@@ -101,12 +121,25 @@ const bodySchema = z.object({
   format: z.enum(["json", "csv"]),
   target: z.object({
     mode: z.enum(["existing", "new"]),
-    /** Required when mode="existing"; required when mode="new". */
+    /** Required for both modes — the collection name. */
     collection: z.string().min(1).max(64).regex(NAME_RE).optional(),
     /** Only used when mode="new". */
     type: z.enum(["base", "user"]).optional(),
+    /**
+     * Primary key strategy for mode="new".
+     *   "auto"        → add `"id" TEXT PRIMARY KEY` column (UUIDs auto-generated on insert)
+     *   "<column>"    → use the named source column as PRIMARY KEY
+     *   omitted       → no explicit PK (SQLite uses rowid)
+     */
+    primaryKey: z.union([z.literal("auto"), z.string().min(1).max(128).regex(IDENT)]).optional(),
+    /** mode="new": include a `created_at` column. */
+    addCreatedAt: z.boolean().optional(),
+    /** mode="new": include an `updated_at` column. */
+    addUpdatedAt: z.boolean().optional(),
   }),
-  mappings: z.array(mappingSchema).min(1),
+  /** Required for mode="existing". For mode="new" with `primaryKey` + columns,
+   *  callers may omit mappings and the backend will map source→target 1:1 by name. */
+  mappings: z.array(mappingSchema),
   data: z.array(z.record(z.unknown())).min(1),
 }).superRefine((val, ctx) => {
   if (!val.target.collection) {
@@ -114,6 +147,14 @@ const bodySchema = z.object({
       code: "custom",
       path: ["target", "collection"],
       message: "target.collection is required",
+    });
+  }
+  // mode="existing" needs mappings; mode="new" can omit them.
+  if (val.target.mode === "existing" && val.mappings.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["mappings"],
+      message: "mappings are required for mode='existing'",
     });
   }
 });
@@ -133,9 +174,24 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
     return c.json({ error: "validation_failed", issues: parsed.error.flatten() }, 400);
   }
 
-  const { format, target, mappings, data } = parsed.data;
+  const { format, target, data } = parsed.data;
   const collectionName = target.collection!;
   const db = c.env.SYSTEM_DB;
+
+  /* For mode="new" without explicit mappings, build a 1:1 mapping from every
+   *  source column found in `data` (skipping nothing). mode="existing" requires
+   *  explicit mappings (validated by Zod). */
+  let mappings = parsed.data.mappings;
+  if (target.mode === "new" && mappings.length === 0) {
+    const sourceSet = new Set<string>();
+    for (const row of data) {
+      for (const k of Object.keys(row)) sourceSet.add(k);
+    }
+    mappings = Array.from(sourceSet).map((src) => ({
+      sourceColumn: src,
+      targetColumn: src,
+    }));
+  }
 
   /* Determine target columns from the mapping (excluding skips). */
   const targetColumns = mappings
@@ -159,6 +215,18 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
   if (target.mode === "new") {
     const collectionType: CollectionType = target.type ?? "base";
 
+    // Resolve primary key strategy.
+    const pkChoice = target.primaryKey ?? "auto";
+    const addIdPk = pkChoice === "auto";
+    // If PK is a source column, validate it's in targetColumns.
+    const primaryKeyColumn = !addIdPk ? pkChoice : undefined;
+    if (primaryKeyColumn && !targetColumns.includes(primaryKeyColumn)) {
+      return c.json(
+        { error: "invalid_primary_key", detail: `Column "${primaryKeyColumn}" is not in the mapped columns.` },
+        400,
+      );
+    }
+
     // Build the field list for DDL.
     let allFields: { name: string; type: string; required?: boolean; unique?: boolean }[] = [];
 
@@ -176,7 +244,12 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
       allFields.push({ name: col, type: "text", required: false, unique: false });
     }
 
-    const ddl = renderCreateTable(collectionName, allFields);
+    const ddl = renderCreateTable(collectionName, allFields, {
+      addIdPk,
+      primaryKeyColumn,
+      addCreatedAt: target.addCreatedAt === true,
+      addUpdatedAt: target.addUpdatedAt === true,
+    });
 
     // 1. Issue DDL first (so failed DDL doesn't leave orphan metadata).
     try {
@@ -248,20 +321,51 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
     }
   }
 
-  /* ── Build + execute INSERT batch ── */
-  // Build a lookup: sourceColumn → targetColumn (null entries already filtered above).
-  const mapLookup = new Map<string, string | null>();
-  for (const m of mappings) {
-    mapLookup.set(m.sourceColumn, m.targetColumn);
+  /* ── Build + execute INSERT batch ──
+   * Column list depends on the choices made at table-creation time:
+   *   - auto-id PK? → include `id` (UUID) as the first column
+   *   - addCreatedAt / addUpdatedAt? → include those (set to now())
+   *   - source-PK column? → value comes from data, no auto-generation
+   * For mode="existing" we detect which of these columns exist via PRAGMA.
+   */
+  const wantIdPk = target.mode === "new"
+    ? (target.primaryKey ?? "auto") === "auto"
+    : false;
+  let existingHasId = true;
+  let existingHasCreatedAt = true;
+  let existingHasUpdatedAt = true;
+  if (target.mode === "existing") {
+    try {
+      const { results } = await db.prepare(`PRAGMA table_info("${collectionName}")`).all<{ name: string }>();
+      const names = new Set((results ?? []).map((r) => r.name));
+      existingHasId = names.has("id");
+      existingHasCreatedAt = names.has("created_at");
+      existingHasUpdatedAt = names.has("updated_at");
+    } catch {
+      // PRAGMA failed — assume defaults.
+    }
   }
+  const includeId = target.mode === "new" ? wantIdPk : existingHasId;
+  const includeCreatedAt = target.mode === "new"
+    ? target.addCreatedAt === true
+    : existingHasCreatedAt;
+  const includeUpdatedAt = target.mode === "new"
+    ? target.addUpdatedAt === true
+    : existingHasUpdatedAt;
 
   const errors: string[] = [];
   let imported = 0;
 
-  // Use a single column list for all inserts (the mapped target columns).
-  const colNames = targetColumns.map((c) => `"${c}"`).join(", ");
-  const placeholders = targetColumns.map(() => "?").join(", ");
-  const insertSql = `INSERT INTO "${collectionName}" (id, ${colNames}, created_at, updated_at) VALUES (?, ${placeholders}, ?, ?)`;
+  // Build the INSERT column list + placeholder list.
+  const insertCols: string[] = [];
+  if (includeId) insertCols.push("id");
+  for (const col of targetColumns) insertCols.push(`"${col}"`);
+  if (includeCreatedAt) insertCols.push("created_at");
+  if (includeUpdatedAt) insertCols.push("updated_at");
+
+  const colList = insertCols.join(", ");
+  const placeholders = insertCols.map(() => "?").join(", ");
+  const insertSql = `INSERT INTO "${collectionName}" (${colList}) VALUES (${placeholders})`;
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i]!;
@@ -284,9 +388,12 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
     const isBlank = mappedValues.every((v) => v === null || v === "" || v === undefined);
     if (isBlank) continue;
 
-    const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
-    const bindValues = [id, ...mappedValues, now, now];
+    const bindValues: unknown[] = [];
+    if (includeId) bindValues.push(crypto.randomUUID());
+    bindValues.push(...mappedValues);
+    if (includeCreatedAt) bindValues.push(now);
+    if (includeUpdatedAt) bindValues.push(now);
 
     try {
       await db.prepare(insertSql).bind(...bindValues).run();

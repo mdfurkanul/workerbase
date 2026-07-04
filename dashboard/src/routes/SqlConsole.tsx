@@ -43,7 +43,24 @@ export default function SqlConsole() {
   const [dragOver, setDragOver] = useState(false);
 
   const active = saved.find((q) => q.id === activeId) ?? null;
-  const editorTitle = active?.title ?? "Untitled query";
+
+  /** Auto-generate a title like "Query 1", "Query 2", etc. based on
+   *  existing saved titles. Used as a placeholder when the user hasn't
+   *  typed a custom title yet. */
+  function nextAutoTitle(): string {
+    let max = 0;
+    for (const q of saved) {
+      const m = q.title.match(/^Query (\d+)$/i);
+      if (m) max = Math.max(max, parseInt(m[1]!, 10));
+    }
+    return `Query ${max + 1}`;
+  }
+
+  // The visible title: explicit custom title > saved title > auto-generated.
+  // `customTitle` is non-null only when the user has typed something.
+  const [customTitle, setCustomTitle] = useState<string | null>(null);
+  const editorTitle = active?.title ?? customTitle ?? nextAutoTitle();
+  const isCustom = customTitle !== null && customTitle.trim() !== "";
 
   /* ─── Load saved queries from API ──────────────────────────────── */
   async function loadSaved() {
@@ -95,33 +112,27 @@ export default function SqlConsole() {
 
   /* ─── Save / rename / new ──────────────────────────────────────── */
 
-  /** Auto-generate a title like "Query 1", "Query 2", etc. */
-  function nextAutoTitle(): string {
-    let max = 0;
-    for (const q of saved) {
-      const m = q.title.match(/^Query (\d+)$/i);
-      if (m) max = Math.max(max, parseInt(m[1]!, 10));
-    }
-    return `Query ${max + 1}`;
-  }
-
   async function handleSave() {
-    // If editing an existing query, update it in place.
+    // If editing an existing query, update it in place. Use the custom
+    // title if set, otherwise keep the existing saved title.
     if (activeId) {
       try {
+        const next = isCustom ? customTitle!.trim() : (active?.title ?? nextAutoTitle());
         await apiClient.patch(`/api/core/sql/queries/${activeId}`, {
-          title: editorTitle || nextAutoTitle(),
+          title: next || nextAutoTitle(),
           sql: query,
         });
         await loadSaved();
       } catch { /* ignore */ }
       return;
     }
-    // Otherwise create a new one with an auto-generated title.
-    const title = nextAutoTitle();
+    // Otherwise create a new one. If the user typed a custom title, use it;
+    // fall back to the auto-generated "Query N".
+    const title = isCustom ? customTitle!.trim() || nextAutoTitle() : nextAutoTitle();
     try {
       const res = await apiClient.post<{ id: string }>("/api/core/sql/queries", { title, sql: query });
       setActiveId(res.id);
+      setCustomTitle(null);
       await loadSaved();
     } catch { /* ignore */ }
   }
@@ -132,12 +143,19 @@ export default function SqlConsole() {
   }
 
   async function commitTitle() {
-    const next = titleDraft.trim() || nextAutoTitle();
+    const next = titleDraft.trim();
     if (activeId) {
+      // Persist rename on an existing saved query.
       try {
-        await apiClient.patch(`/api/core/sql/queries/${activeId}`, { title: next });
+        await apiClient.patch(`/api/core/sql/queries/${activeId}`, {
+          title: next || nextAutoTitle(),
+        });
         await loadSaved();
       } catch { /* ignore */ }
+      setCustomTitle(null);
+    } else {
+      // Stash the user's title for when the unsaved query gets Saved.
+      setCustomTitle(next || null);
     }
     setEditingTitle(false);
   }
@@ -147,12 +165,14 @@ export default function SqlConsole() {
     setActiveId(null);
     setResult(null);
     setTitleDraft("");
+    setCustomTitle(null);
   }
 
   async function handleOpen(q: SavedQuery) {
     setQuery(q.sql);
     setActiveId(q.id);
     setResult(null);
+    setCustomTitle(null);
   }
 
   async function handleDelete(id: string) {
@@ -294,12 +314,18 @@ export default function SqlConsole() {
                       if (e.key === "Enter") { e.preventDefault(); commitTitle(); }
                       else if (e.key === "Escape") setEditingTitle(false);
                     }}
-                    placeholder="Untitled query"
+                    placeholder="Query title"
                     className="font-display text-[18px] bg-transparent border-b border-brand outline-none flex-1 min-w-0 text-ink"
                   />
                 ) : (
                   <button onClick={startEditTitle} title="Rename" className="group inline-flex items-center gap-1.5 min-w-0">
-                    <span className="font-display text-[18px] text-ink truncate">{editorTitle}</span>
+                    <span
+                      className={`font-display text-[18px] truncate ${
+                        active || isCustom ? "text-ink" : "text-ink-faint italic"
+                      }`}
+                    >
+                      {editorTitle}
+                    </span>
                     {active && <span className="label-mono text-ink-faint shrink-0">· saved</span>}
                     <Pencil size={12} className="text-ink-faint opacity-0 group-hover:opacity-100 transition shrink-0" />
                   </button>
@@ -342,7 +368,6 @@ export default function SqlConsole() {
   );
 }
 
-// (deriveTitle removed — titles auto-generate as "Query 1", "Query 2", etc.)
 
 function EmptyState() {
   return (
