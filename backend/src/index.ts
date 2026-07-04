@@ -10,6 +10,9 @@ import {
   installRouter,
   storageRouter,
   recordsRouter,
+  settingsRouter,
+  exportRouter,
+  importRouter,
 } from "./core/index.js";
 
 // Re-export the DO class so Wrangler can locate it via `main`.
@@ -36,6 +39,9 @@ app.use("*", async (c, next) => {
  *   /api/core/realtime/*      — WebSocket upgrades
  *   /api/core/install/*       — first-run install flow
  *   /api/core/storage/*       — R2 file storage (admin)
+ *   /api/core/settings/*      — global app settings (admin)
+ *   /api/core/export/*        — bulk data export (admin)
+ *   /api/core/import/*        — bulk data import (admin)
  */
 const core = new Hono<{ Bindings: Env }>();
 core.route("/superusers", superuserAuthRouter);
@@ -44,6 +50,9 @@ core.route("/sql", sqlQueriesRouter);
 core.route("/realtime", realtimeRouter);
 core.route("/install", installRouter);
 core.route("/storage", storageRouter);
+core.route("/settings", settingsRouter);
+core.route("/export", exportRouter);
+core.route("/import", importRouter);
 
 app.route("/api/core", core);
 

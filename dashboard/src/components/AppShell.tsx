@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Code2,
   FileText,
+  Github,
   Network,
   Pin,
   PinOff,
@@ -98,7 +99,7 @@ function TopBar() {
           </nav>
         </div>
 
-        {/* Right — refresh, theme, user */}
+        {/* Right — refresh, github, theme, user */}
         <div className="flex items-center gap-2">
           <button
             className="p-1.5 rounded hover:bg-white/15 transition"
@@ -107,6 +108,15 @@ function TopBar() {
           >
             <RefreshCw size={14} />
           </button>
+          <a
+            href="https://github.com/mdfurkanul/workerbase"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-1.5 rounded hover:bg-white/15 transition"
+            title="GitHub repository"
+          >
+            <Github size={14} />
+          </a>
           <ThemeToggle inverted />
           <div className="relative">
             <button

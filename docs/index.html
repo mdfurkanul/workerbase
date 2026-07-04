@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkerBase API Explorer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-elev: #161a22;
+    --bg-soft: #1c2230;
+    --border: #262d3a;
+    --text: #e6e9ef;
+    --text-dim: #9aa3b2;
+    --text-mute: #6b7283;
+    --accent: #f38020;
+    --accent-soft: rgba(243, 128, 32, 0.14);
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --blue: #60a5fa;
+    --purple: #c084fc;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
+
+  /* Sidebar */
+  aside {
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 18px 14px 40px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 9px;
+    font-weight: 700; font-size: 15px; letter-spacing: -0.01em;
+    padding: 4px 6px 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .brand .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent);
+  }
+  .brand .sub { color: var(--text-mute); font-weight: 500; font-size: 11px; margin-left: auto; }
+
+  .search {
+    width: 100%;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 11px;
+    border-radius: 7px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .nav-group { margin-bottom: 16px; }
+  .nav-group > .title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-mute);
+    font-weight: 600;
+    padding: 4px 8px;
+  }
+  .nav-item {
+    display: block;
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .12s;
+    border-left: 2px solid transparent;
+  }
+  .nav-item:hover { background: var(--bg-soft); color: var(--text); }
+  .nav-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+  .nav-item .method {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .m-get { background: rgba(96,165,250,0.18); color: var(--blue); }
+  .m-post { background: rgba(74,222,128,0.16); color: var(--green); }
+  .m-patch { background: rgba(251,191,36,0.16); color: var(--yellow); }
+  .m-delete { background: rgba(248,113,113,0.16); color: var(--red); }
+  .m-ws { background: rgba(192,132,252,0.16); color: var(--purple); }
+
+  /* Main content */
+  main { overflow-y: auto; height: 100vh; }
+  .content { max-width: 980px; margin: 0 auto; padding: 40px 48px 120px; }
+
+  /* Markdown rendering */
+  h1, h2, h3, h4 { letter-spacing: -0.02em; font-weight: 700; scroll-margin-top: 20px; }
+  h1 { font-size: 28px; margin: 0 0 8px; }
+  h1 .em { color: var(--accent); }
+  h2 {
+    font-size: 20px;
+    margin: 48px 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .anchor-mark { color: var(--accent); font-family: var(--mono); font-size: 14px; }
+  h3 { font-size: 15px; margin: 32px 0 10px; color: var(--text); }
+  h3 code { font-size: 14px; background: var(--bg-soft); padding: 3px 8px; border-radius: 5px; border: 1px solid var(--border); }
+  h4 { font-size: 13px; margin: 18px 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+
+  p { color: var(--text-dim); margin: 8px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--bg-soft);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--accent);
+  }
+  pre {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 12.5px;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--text); }
+  blockquote {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 10px 14px;
+    margin: 14px 0;
+    border-radius: 0 6px 6px 0;
+    color: var(--text);
+  }
+  blockquote p { color: var(--text); margin: 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+  ul, ol { padding-left: 22px; color: var(--text-dim); }
+  li { margin: 3px 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 16px;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    background: var(--bg-elev);
+    text-align: left;
+    padding: 9px 12px;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg-elev); }
+  td code { font-size: 12px; }
+
+  /* Endpoint blocks */
+  .endpoint-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 14px 0 22px;
+  }
+  .endpoint-block > h3 { margin-top: 0; }
+
+  /* Topbar */
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(15,17,21,0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 48px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .topbar .breadcrumb { font-size: 12px; color: var(--text-mute); font-family: var(--mono); }
+  .topbar .badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent);
+    font-weight: 600; letter-spacing: 0.04em;
+  }
+
+  /* Loading / error states */
+  .state { padding: 60px; text-align: center; color: var(--text-mute); }
+  .state.error { color: var(--red); }
+  .spinner {
+    width: 22px; height: 22px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    margin: 0 auto 12px; animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hidden { display: none !important; }
+
+  /* Highlight on search */
+  .search-hit { background: var(--accent-soft); color: var(--accent); padding: 0 2px; border-radius: 2px; }
+  .row-hidden { display: none; }
+
+  @media (max-width: 880px) {
+    .app { grid-template-columns: 1fr; }
+    aside { display: none; }
+    .content { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">
+      <span class="dot"></span>
+      <span>WorkerBase</span>
+      <span class="sub">v0.0.0</span>
+    </div>
+    <input class="search" id="search" placeholder="🔍 Search endpoints…" autocomplete="off" />
+    <div id="nav"></div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <span class="breadcrumb" id="breadcrumb">/</span>
+      <span class="badge">LIVE</span>
+    </div>
+    <div class="content">
+      <div class="state" id="state">
+        <div class="spinner"></div>
+        Loading API reference…
+      </div>
+      <article id="rendered" class="hidden"></article>
+    </div>
+  </main>
+</div>
+
+<script>
+  const STATE = document.getElementById('state');
+  const RENDERED = document.getElementById('rendered');
+  const NAV = document.getElementById('nav');
+  const SEARCH = document.getElementById('search');
+  const BREADCRUMB = document.getElementById('breadcrumb');
+
+  const METHOD_COLORS = {
+    GET: 'm-get', POST: 'm-post', PATCH: 'm-patch',
+    DELETE: 'm-delete', WS: 'm-ws'
+  };
+
+  function methodOf(text) {
+    const m = text.match(/^\s*(GET|POST|PATCH|DELETE|WS)\s+/i);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  function slugify(s) {
+    return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  // Highlight code blocks with method badges on h3 lines
+  function decorate() {
+    RENDERED.querySelectorAll('h3').forEach(h => {
+      const m = methodOf(h.textContent);
+      if (!m) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'endpoint-block';
+      h.parentNode.insertBefore(wrap, h);
+      // Move succeeding siblings into the wrap until next h2/h3 or hr
+      let next = h.nextElementSibling;
+      const siblings = [h];
+      while (next && !['H2','H3'].includes(next.tagName)) {
+        siblings.push(next);
+        next = next.nextElementSibling;
+      }
+      siblings.forEach(el => wrap.appendChild(el));
+
+      // Inject method badge at start of h3
+      const span = document.createElement('span');
+      span.className = 'method ' + (METHOD_COLORS[m] || '');
+      span.textContent = m;
+      h.insertBefore(span, h.firstChild);
+    });
+  }
+
+  function buildNav() {
+    NAV.innerHTML = '';
+    const headings = [...RENDERED.querySelectorAll('h2, h3')];
+    const groups = {};
+    let currentGroup = null;
+
+    headings.forEach(h => {
+      if (h.tagName === 'H2') {
+        currentGroup = h.textContent.replace(/^[0-9]+\.\s*/, '');
+        groups[currentGroup] = [];
+      } else if (currentGroup && h.textContent.trim()) {
+        const m = methodOf(h.textContent);
+        const label = h.textContent.replace(/^(GET|POST|PATCH|DELETE|WS)\s+/i, '').trim();
+        groups[currentGroup].push({
+          id: h.id,
+          method: m,
+          label,
+          full: h.textContent.trim()
+        });
+      }
+    });
+
+    Object.entries(groups).forEach(([name, items]) => {
+      const g = document.createElement('div');
+      g.className = 'nav-group';
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = name;
+      g.appendChild(title);
+
+      if (items.length === 0) {
+        // section without endpoints (e.g., Auth Model, Conventions)
+        const a = document.createElement('a');
+        a.className = 'nav-item';
+        a.textContent = 'Overview';
+        a.dataset.full = name;
+        a.onclick = () => scrollToH2(name);
+        g.appendChild(a);
+      } else {
+        items.forEach(item => {
+          const a = document.createElement('a');
+          a.className = 'nav-item';
+          a.dataset.full = item.full;
+          a.innerHTML = (item.method
+            ? `<span class="method ${METHOD_COLORS[item.method] || ''}">${item.method}</span>`
+            : '') + `<span>${escapeHtml(item.label)}</span>`;
+          a.onclick = () => {
+            const el = document.getElementById(item.id);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          };
+          g.appendChild(a);
+        });
+      }
+      NAV.appendChild(g);
+    });
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  function scrollToH2(name) {
+    const h2s = [...RENDERED.querySelectorAll('h2')];
+    const target = h2s.find(h => h.textContent.replace(/^[0-9]+\.\s*/, '') === name);
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Active section tracking
+  function setupScrollSpy() {
+    const headings = [...RENDERED.querySelectorAll('h2, h3')];
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          BREADCRUMB.textContent = entry.target.textContent
+            .replace(/^(GET|POST|PATCH|DELETE|WS)\s+/i, '')
+            .trim();
+          const id = entry.target.id;
+          NAV.querySelectorAll('.nav-item').forEach(n => {
+            n.classList.toggle('active', n.dataset.full && entry.target.textContent.trim().includes(n.dataset.full.slice(0, 30)));
+          });
+        }
+      });
+    }, { rootMargin: '-80px 0px -70% 0px', threshold: 0 });
+    headings.forEach(h => observer.observe(h));
+  }
+
+  // Search filter
+  SEARCH.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    NAV.querySelectorAll('.nav-item').forEach(item => {
+      const text = (item.dataset.full || item.textContent).toLowerCase();
+      item.classList.toggle('hidden', q && !text.includes(q));
+    });
+    NAV.querySelectorAll('.nav-group').forEach(g => {
+      const anyVisible = [...g.querySelectorAll('.nav-item')].some(n => !n.classList.contains('hidden'));
+      g.style.display = anyVisible ? '' : 'none';
+    });
+  });
+
+  // Render
+  marked.setOptions({
+    gfm: true,
+    breaks: false,
+    headerIds: true,
+    headerPrefix: '',
+  });
+
+  async function load() {
+    // Try several locations to support both /docs and / serving
+    const candidates = ['./API.md', './docs/API.md', '../API.md', '/API.md'];
+    let md = null;
+    let lastErr;
+    for (const path of candidates) {
+      try {
+        const res = await fetch(path);
+        if (res.ok) { md = await res.text(); break; }
+      } catch (e) { lastErr = e; }
+    }
+    if (!md) {
+      STATE.className = 'state error';
+      STATE.innerHTML = '⚠️ Could not load <code>API.md</code>.<br>Run <code>npm run docs</code> from the project root, or open this file via a local server.';
+      return;
+    }
+
+    RENDERED.innerHTML = marked.parse(md);
+    decorate();
+    buildNav();
+    setupScrollSpy();
+    STATE.classList.add('hidden');
+    RENDERED.classList.remove('hidden');
+  }
+
+  load();
+</script>
+</body>
+</html>

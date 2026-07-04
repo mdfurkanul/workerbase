@@ -16,7 +16,7 @@ const COLLECTION_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 export interface CollectionTokenPayload {
   collection: string; // collection name (e.g. "users", "members")
-  recordId: string; // _row_ id in the collection's physical table
+  recordId: string; // id (PK) in the collection's physical table
   email: string;
   verified: boolean;
   iat: number; // issued at (seconds)

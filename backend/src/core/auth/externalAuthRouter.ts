@@ -235,7 +235,7 @@ externalAuthRouter.post("/:name/auth/register", async (c) => {
 
   // Check for existing record by email.
   const existing = await c.env.SYSTEM_DB.prepare(
-    `SELECT _row_ FROM ${collectionName} WHERE email = ? LIMIT 1`,
+    `SELECT id FROM ${collectionName} WHERE email = ? LIMIT 1`,
   )
     .bind(normalizedEmail)
     .first();
@@ -245,7 +245,7 @@ externalAuthRouter.post("/:name/auth/register", async (c) => {
 
   const { hash, salt } = await hashPassword(password);
   const id = crypto.randomUUID();
-  const now = Date.now();
+  const now = Math.floor(Date.now() / 1000); // columns are INTEGER unixepoch (seconds)
 
   // Build INSERT with optional user-defined data fields.
   const extraFields = filterUserDataFields(data, meta.schema ?? []);
@@ -253,14 +253,14 @@ externalAuthRouter.post("/:name/auth/register", async (c) => {
   const extraValues = extraColumns.map((col) => extraFields[col]);
 
   const columnList = [
-    "_row_",
+    "id",
     "email",
     "password_hash",
     "password_salt",
     "verified",
     "token_key",
-    "created",
-    "updated",
+    "created_at",
+    "updated_at",
     ...extraColumns,
   ].join(", ");
 
@@ -311,7 +311,7 @@ externalAuthRouter.post("/:name/auth/register", async (c) => {
   return c.json(
     {
       record: {
-        _row_: id,
+        id,
         email: normalizedEmail,
         verified: false,
         ...(meta.authConfig.requirePasswordChange ? { requirePasswordChange: true } : {}),
@@ -351,11 +351,11 @@ externalAuthRouter.post("/:name/auth/login", async (c) => {
   const normalizedEmail = normalizeEmail(email);
 
   const row = await c.env.SYSTEM_DB.prepare(
-    `SELECT _row_, email, password_hash, password_salt, verified FROM ${collectionName} WHERE email = ? LIMIT 1`,
+    `SELECT id, email, password_hash, password_salt, verified FROM ${collectionName} WHERE email = ? LIMIT 1`,
   )
     .bind(normalizedEmail)
     .first<{
-      _row_: string;
+      id: string;
       email: string;
       password_hash: string;
       password_salt: string;
@@ -378,7 +378,7 @@ externalAuthRouter.post("/:name/auth/login", async (c) => {
   const token = await signCollectionToken(
     {
       collection: collectionName,
-      recordId: row._row_,
+      recordId: row.id,
       email: row.email,
       verified: row.verified === 1,
     },
@@ -387,7 +387,7 @@ externalAuthRouter.post("/:name/auth/login", async (c) => {
 
   return c.json({
     record: {
-      _row_: row._row_,
+      id: row.id,
       email: row.email,
       verified: row.verified === 1,
     },
@@ -425,9 +425,9 @@ externalAuthRouter.get("/:name/auth/verify-email", async (c) => {
     return c.json({ error: "token_collection_mismatch" }, 400);
   }
 
-  const now = Date.now();
+  const now = Math.floor(Date.now() / 1000);
   await c.env.SYSTEM_DB.prepare(
-    `UPDATE ${collectionName} SET verified = 1, updated = ? WHERE _row_ = ?`,
+    `UPDATE ${collectionName} SET verified = 1, updated_at = ? WHERE id = ?`,
   )
     .bind(now, result.recordRef)
     .run();
@@ -464,10 +464,10 @@ externalAuthRouter.post("/:name/auth/request-password-reset", async (c) => {
   const normalizedEmail = normalizeEmail(parsed.data.email);
 
   const row = await c.env.SYSTEM_DB.prepare(
-    `SELECT _row_, email FROM ${collectionName} WHERE email = ? LIMIT 1`,
+    `SELECT id, email FROM ${collectionName} WHERE email = ? LIMIT 1`,
   )
     .bind(normalizedEmail)
-    .first<{ _row_: string; email: string }>();
+    .first<{ id: string; email: string }>();
 
   // Always return 200 — never leak whether the email exists.
   if (!row) {
@@ -477,7 +477,7 @@ externalAuthRouter.post("/:name/auth/request-password-reset", async (c) => {
   const { value } = await createCollectionToken(
     c.env.SYSTEM_DB,
     collectionName,
-    row._row_,
+    row.id,
     "passwordReset",
     EXPIRY_PASSWORD_RESET_MS,
   );
@@ -534,11 +534,11 @@ externalAuthRouter.post("/:name/auth/reset-password", async (c) => {
   }
 
   const { hash, salt } = await hashPassword(password);
-  const now = Date.now();
+  const now = Math.floor(Date.now() / 1000);
 
   // Rotate token_key so existing sessions are invalidated.
   await c.env.SYSTEM_DB.prepare(
-    `UPDATE ${collectionName} SET password_hash = ?, password_salt = ?, token_key = ?, updated = ? WHERE _row_ = ?`,
+    `UPDATE ${collectionName} SET password_hash = ?, password_salt = ?, token_key = ?, updated_at = ? WHERE id = ?`,
   )
     .bind(hash, salt, crypto.randomUUID(), now, result.recordRef)
     .run();
@@ -558,15 +558,15 @@ externalAuthRouter.get("/:name/auth/me", requireCollectionAuth, async (c) => {
   }
 
   const row = await c.env.SYSTEM_DB.prepare(
-    `SELECT _row_, email, verified, created, updated FROM ${collectionName} WHERE _row_ = ? LIMIT 1`,
+    `SELECT id, email, verified, created_at, updated_at FROM ${collectionName} WHERE id = ? LIMIT 1`,
   )
     .bind(authRecord.recordId)
     .first<{
-      _row_: string;
+      id: string;
       email: string;
       verified: number;
-      created: number;
-      updated: number;
+      created_at: number;
+      updated_at: number;
     }>();
 
   if (!row) {
@@ -575,11 +575,11 @@ externalAuthRouter.get("/:name/auth/me", requireCollectionAuth, async (c) => {
 
   return c.json({
     record: {
-      _row_: row._row_,
+      id: row.id,
       email: row.email,
       verified: row.verified === 1,
-      created: row.created,
-      updated: row.updated,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     },
   });
 });

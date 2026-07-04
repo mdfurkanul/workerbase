@@ -168,6 +168,26 @@ function isSafeSelectQuery(raw: string): boolean {
   return !forbidden.test(q);
 }
 
+/**
+ * Parse-check a view's SELECT query by running `EXPLAIN <query>` against
+ * the database. Returns null on success, or the D1 error message on failure.
+ *
+ * This is a read-only check — EXPLAIN never executes the query, so even
+ * pathological SELECTs can't mutate state. It catches syntax errors like
+ * `created by` (instead of `ORDER BY`) before we touch sqlite_master.
+ */
+async function validateViewQuery(
+  db: D1Database,
+  query: string,
+): Promise<string | null> {
+  try {
+    await db.prepare(`EXPLAIN ${query}`).all();
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
 /* ── Router ── */
 
 export const collectionsRouter = new Hono<{ Bindings: Env }>();
@@ -196,6 +216,14 @@ collectionsRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
   // schema matches the physical table.
   let persistedSchema: FieldDefinition[] | null = null;
   if (spec.type === "view") {
+    // Validate the SELECT query before touching sqlite_master.
+    if (!isSafeSelectQuery(spec.query)) {
+      return c.json({ error: "unsafe_view_query" }, 400);
+    }
+    const explainErr = await validateViewQuery(c.env.SYSTEM_DB, spec.query);
+    if (explainErr) {
+      return c.json({ error: "invalid_view_query", detail: explainErr }, 400);
+    }
     ddl = renderCreateView(spec.name, spec.query);
   } else {
     // For auth collections, prepend auth columns.
@@ -362,14 +390,18 @@ collectionsRouter.get("/", requireAuth, async (c) => {
   // distinguish base / user / view collections (PRAGMA alone can't tell
   // us this — it only returns column names + raw SQL types).
   const metaRows = await c.env.SYSTEM_DB.prepare(
-    `SELECT name, type, schema FROM _collections`,
-  ).all<{ name: string; type: string; schema: string | null }>();
-  const metaByName = new Map<string, { type: string; schema: FieldDefinition[] | null }>(
+    `SELECT name, type, schema, query FROM _collections`,
+  ).all<{ name: string; type: string; schema: string | null; query: string | null }>();
+  const metaByName = new Map<
+    string,
+    { type: string; schema: FieldDefinition[] | null; query: string | null }
+  >(
     (metaRows.results ?? []).map((r) => [
       r.name,
       {
         type: r.type as CollectionType,
         schema: r.schema ? (JSON.parse(r.schema) as FieldDefinition[]) : null,
+        query: r.query,
       },
     ]),
   );
@@ -415,6 +447,7 @@ collectionsRouter.get("/", requireAuth, async (c) => {
           type: declaredType,
           source,
           schema,
+          query: declaredType === "view" ? (meta?.query ?? null) : null,
           count: 0,
         };
       }),
@@ -447,9 +480,9 @@ collectionsRouter.get("/:name", requireAuth, async (c) => {
 
   // Look up declared type + stored schema (source of truth).
   const meta = await db
-    .prepare(`SELECT type, schema FROM _collections WHERE name = ?`)
+    .prepare(`SELECT type, schema, query FROM _collections WHERE name = ?`)
     .bind(name)
-    .first<{ type: string; schema: string | null }>();
+    .first<{ type: string; schema: string | null; query: string | null }>();
   const declaredType = meta
     ? (meta.type as CollectionType)
     : source === "system"
@@ -485,6 +518,7 @@ collectionsRouter.get("/:name", requireAuth, async (c) => {
       type: declaredType,
       source,
       schema,
+      query: declaredType === "view" ? (meta?.query ?? null) : null,
       count: 0,
     },
   });
@@ -679,6 +713,12 @@ collectionsRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) =
     if (newQuery !== existing.query) {
       if (!isSafeSelectQuery(newQuery)) {
         return c.json({ error: "unsafe_view_query" }, 400);
+      }
+      // Parse-check before dropping the existing view — leaves the
+      // current definition intact if the new SQL is malformed.
+      const explainErr = await validateViewQuery(c.env.SYSTEM_DB, newQuery);
+      if (explainErr) {
+        return c.json({ error: "invalid_view_query", detail: explainErr }, 400);
       }
       try {
         await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${name}"`);

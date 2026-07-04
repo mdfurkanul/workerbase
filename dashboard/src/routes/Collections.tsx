@@ -17,7 +17,6 @@ import { useCollections } from "@/hooks/useCollections";
 import { useAuth, isAdmin, canEdit } from "@/hooks/useAuth";
 import { type Record as Row, type Collection } from "@/lib/mockData";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
-import { getVisibleColumns, setVisibleColumns } from "@/lib/collectionStore";
 import { apiClient, ApiError } from "@/lib/api-client";
 
 /**
@@ -34,8 +33,10 @@ import { apiClient, ApiError } from "@/lib/api-client";
  * endpoint would skip hashing, salting, and bookkeeping — so we hide the
  * affordances entirely and point users at the right tool.
  */
-function collectionAllowsRecordEdits(name: string): boolean {
-  return !name.startsWith("_");
+function collectionAllowsRecordEdits(name: string, type: string): boolean {
+  // System tables are managed via dedicated admin pages.
+  // Views are read-only (saved SELECT) — no insert/update/delete on rows.
+  return !name.startsWith("_") && type !== "view";
 }
 
 /**
@@ -135,7 +136,7 @@ function CollectionView({ name }: { name: string }) {
   const { user } = useAuth();
   const collection = collections.find((c) => c.name === name);
   const [tick, setTick] = useState(0);
-  const editSaveRef = useRef<(() => void) | null>(null);
+  const editSaveRef = useRef<(() => boolean | Promise<boolean | void>) | null>(null);
   const newRecordSaveRef = useRef<(() => void) | null>(null);
   const [params, setParams] = useSearchParams();
   const action = params.get("action");
@@ -232,8 +233,9 @@ function CollectionView({ name }: { name: string }) {
         key={tick}
         collectionName={collection.name}
         schema={collection.schema}
+        collectionType={collection.type}
         onNewRecord={
-          canEdit(user) && collectionAllowsRecordEdits(collection.name)
+          canEdit(user) && collectionAllowsRecordEdits(collection.name, collection.type)
             ? () => openSlide("new")
             : undefined
         }
@@ -249,9 +251,9 @@ function CollectionView({ name }: { name: string }) {
           <>
             <button onClick={closeSlide} className="btn-ghost">Cancel</button>
             <button
-              onClick={() => {
-                editSaveRef.current?.();
-                closeSlide();
+              onClick={async () => {
+                const ok = await editSaveRef.current?.();
+                if (ok !== false) closeSlide();
               }}
               className="btn-primary"
             >
@@ -261,6 +263,7 @@ function CollectionView({ name }: { name: string }) {
         }
       >
         <EditPanel
+          key={collection.id}
           collection={collection}
           onSaved={reload}
           registerSave={(fn) => { editSaveRef.current = fn; }}
@@ -357,10 +360,12 @@ function CollectionView({ name }: { name: string }) {
 function RecordsTable({
   collectionName,
   schema,
+  collectionType,
   onNewRecord,
 }: {
   collectionName: string;
   schema: { name: string; type: string }[];
+  collectionType: Collection["type"];
   onNewRecord?: () => void;
 }) {
   const [params, setParams] = useSearchParams();
@@ -384,24 +389,20 @@ function RecordsTable({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Visible columns (per-collection, persisted in localStorage).
+  // Visible columns — default to ALL selected on every visit.
   const allColumns = useMemo(
     () => (schema.length ? schema : [{ name: "id", type: "text" }]),
     [schema],
   );
-  const [visible, setVisible] = useState<string[]>(() => {
-    const stored = getVisibleColumns(collectionName);
-    if (stored && stored.length > 0) {
-      const known = new Set(allColumns.map((c) => c.name));
-      const filtered = stored.filter((n) => known.has(n));
-      return filtered.length > 0 ? filtered : allColumns.map((c) => c.name);
-    }
-    return allColumns.map((c) => c.name);
-  });
+  const [visible, setVisible] = useState<string[]>(() => allColumns.map((c) => c.name));
+
+  // Re-select all when schema (or collection) changes.
+  useEffect(() => {
+    setVisible(allColumns.map((c) => c.name));
+  }, [allColumns]);
 
   function handleVisibleChange(next: string[]) {
     setVisible(next);
-    setVisibleColumns(collectionName, next);
   }
 
   // ─── Fetch records from the API ───────────────────────────────────
@@ -676,7 +677,7 @@ function RecordsTable({
         recordId={drawerRow?.id ?? null}
         schema={allColumns}
         snapshot={drawerSnapshot}
-        readOnly={!collectionAllowsRecordEdits(collectionName)}
+        readOnly={!collectionAllowsRecordEdits(collectionName, collectionType)}
         onClose={() => setDrawerRow(null)}
         onChanged={() => setReloadKey((k) => k + 1)}
       />
@@ -685,7 +686,7 @@ function RecordsTable({
         count={selectedIds.size}
         onClear={clearSelection}
         onDelete={
-          canEdit(user) && collectionAllowsRecordEdits(collectionName)
+          canEdit(user) && collectionAllowsRecordEdits(collectionName, collectionType)
             ? () => setConfirmOpen(true)
             : undefined
         }
@@ -738,6 +739,74 @@ function buildPageList(current: number, total: number): Array<number | "…"> {
 }
 
 /* ─── SlideOver panel: edit collection (name + full schema editor) ── */
+
+/**
+ * Build the editable field list for the EditPanel.
+ *
+ * - Locked system fields (`id`, `created`, `updated`) get the `locked` flag.
+ * - For `type="user"` collections, the backend-managed auth columns are surfaced
+ *   as locked rows so users see they exist and can't add duplicates:
+ *     • `email` — real column returned by backend → promoted to locked + authField.
+ *     • `password` — virtual (input-only; hashed into password_hash + password_salt).
+ *   Both are stripped from any future PATCH payload — the backend owns them.
+ *
+ * NOTE: This must be a pure function of `collection` so the `EditPanel`'s
+ * `key={collection.id}` remount strategy keeps things fresh on switch.
+ */
+function buildEditFields(collection: Collection): SchemaField[] {
+  const baseFields: SchemaField[] = collection.schema.map((f, i) => ({
+    cid: `existing_${i}`,
+    name: f.name,
+    type: (f.type as SchemaField["type"]) ?? "text",
+    required: false,
+    unique: false,
+    hidden: false,
+    options: {},
+    locked: ["id", "created", "updated", "created_at"].includes(f.name),
+    primaryKey: f.name === "id",
+    auto: f.name === "created" || f.name === "updated",
+  }));
+
+  if (collection.type !== "user") return baseFields;
+
+  const existing = new Set(baseFields.map((f) => f.name));
+  const out = baseFields.map((f) =>
+    f.name === "email"
+      ? { ...f, locked: true, auto: true, authField: true, required: true, unique: true }
+      : f,
+  );
+
+  if (!existing.has("email")) {
+    out.push({
+      cid: "auth_email",
+      name: "email",
+      type: "text",
+      required: true,
+      unique: true,
+      hidden: false,
+      options: {},
+      locked: true,
+      auto: true,
+      authField: true,
+    });
+  }
+  if (!existing.has("password")) {
+    out.push({
+      cid: "auth_password",
+      name: "password",
+      type: "text",
+      required: true,
+      unique: false,
+      hidden: true,
+      options: {},
+      locked: true,
+      auto: true,
+      authField: true,
+    });
+  }
+  return out;
+}
+
 function EditPanel({
   collection,
   onSaved,
@@ -745,33 +814,64 @@ function EditPanel({
 }: {
   collection: Collection;
   onSaved: () => void;
-  registerSave: (fn: () => void) => void;
+  registerSave: (fn: () => boolean | Promise<boolean | void>) => void;
 }) {
   const [name, setName] = useState(collection.name);
   const [authSettings, setAuthSettings] = useState<AuthSettings>(DEFAULT_AUTH_SETTINGS);
   const [emailTemplates, setEmailTemplates] = useState<EmailTemplates>(DEFAULT_TEMPLATES);
   const [editTab, setEditTab] = useState<"schema" | "auth" | "templates">("schema");
+  // For view collections: editable SQL SELECT query.
+  const [viewQuery, setViewQuery] = useState<string>(collection.query ?? "");
+  const [viewSaving, setViewSaving] = useState(false);
+  const [viewError, setViewError] = useState<string | null>(null);
   const schemaData = useRef<SchemaData>({
-    fields: collection.schema.map((f, i) => ({
-      cid: `existing_${i}`,
-      name: f.name,
-      type: (f.type as SchemaField["type"]) ?? "text",
-      required: false,
-      unique: false,
-      hidden: false,
-      options: {},
-      locked: ["id", "created", "updated", "created_at"].includes(f.name),
-      primaryKey: f.name === "id",
-      auto: f.name === "created" || f.name === "updated",
-    })),
+    fields: buildEditFields(collection),
     indexes: [],
     constraints: [],
   });
 
-  function handleSave() {
-    // NOTE: schema/name edits are not yet persisted to the backend (no
-    // PATCH /api/core/collections/:name endpoint). The schema editor
-    // remains in the UI as a draft view; onSaved() just closes the panel.
+  async function handleSave(): Promise<boolean | void> {
+    // For view collections, persist the SQL query via PATCH.
+    if (collection.type === "view") {
+      const trimmed = viewQuery.trim();
+      if (!trimmed) {
+        setViewError("View query cannot be empty.");
+        return false;
+      }
+      // No-op if the query hasn't changed.
+      if (trimmed === (collection.query ?? "").trim()) {
+        onSaved();
+        return true;
+      }
+      setViewSaving(true);
+      setViewError(null);
+      try {
+        await apiClient.patch(
+          `/api/core/collections/${encodeURIComponent(collection.name)}`,
+          { query: trimmed },
+        );
+        onSaved();
+        return true;
+      } catch (err) {
+        const msg =
+          err instanceof ApiError
+            ? (typeof err.detail === "string"
+                ? err.detail
+                : (err.detail as { message?: string; error?: string } | null)?.message
+                  ?? (err.detail as { error?: string } | null)?.error
+                  ?? err.message)
+            : err instanceof Error
+              ? err.message
+              : "Failed to save view query";
+        setViewError(msg);
+        return false;
+      } finally {
+        setViewSaving(false);
+      }
+    }
+    // NOTE: schema/name edits for base/user collections are not yet persisted
+    // (no PATCH coverage for column add/drop). The schema editor remains in
+    // the UI as a draft view; onSaved() just closes the panel.
     onSaved();
   }
 
@@ -790,6 +890,36 @@ function EditPanel({
           placeholder="collection_name"
         />
       </section>
+
+      {/* View query editor (view collections only) */}
+      {collection.type === "view" && (
+        <section className="space-y-2">
+          <span className="label-mono">SQL view query</span>
+          <p className="text-[12px] text-ink-muted">
+            The SELECT statement that backs this view. Editing the query here will replace the
+            underlying view definition on save.
+          </p>
+          <textarea
+            value={viewQuery}
+            onChange={(e) => {
+              setViewQuery(e.target.value);
+              setViewError(null);
+            }}
+            spellCheck={false}
+            rows={12}
+            className="field-input font-mono text-[12px] whitespace-pre resize-y"
+            placeholder="SELECT id, email, created_at FROM users WHERE verified = 1"
+          />
+          {viewSaving && (
+            <p className="text-[12px] text-ink-muted">Saving…</p>
+          )}
+          {viewError && (
+            <div className="bg-err-bg text-err text-[12px] border border-line-strong rounded px-3 py-2 font-mono">
+              {viewError}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Tab bar — Schema | Auth | Email templates (auth collections only) */}
       {collection.type === "user" && (
@@ -824,8 +954,9 @@ function EditPanel({
         </div>
       )}
 
-      {/* Schema editor */}
-      {collection.type !== "user" || editTab === "schema" ? (
+      {/* Schema editor (base collections, or the Schema tab on auth collections) */}
+      {(collection.type === "base" ||
+        (collection.type === "user" && editTab === "schema")) && (
         <SchemaEditor
           initialFields={schemaData.current.fields}
           initialIndexes={schemaData.current.indexes}
@@ -834,7 +965,7 @@ function EditPanel({
             schemaData.current = data;
           }}
         />
-      ) : null}
+      )}
 
       {/* Auth config (auth collections only) */}
       {collection.type === "user" && editTab === "auth" && (

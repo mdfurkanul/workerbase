@@ -52,6 +52,14 @@
       ],
       "r2_buckets": [
         { "binding": "STORAGE", "bucket_name": "workerbase-storage-local" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "REALTIME", "class_name": "RealtimeHub" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
       ]
     },
 
@@ -69,6 +77,14 @@
       ],
       "r2_buckets": [
         { "binding": "STORAGE", "bucket_name": "workerbase-storage-preprod" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "REALTIME", "class_name": "RealtimeHub" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
       ]
     },
 
@@ -86,6 +102,14 @@
       ],
       "r2_buckets": [
         { "binding": "STORAGE", "bucket_name": "workerbase-storage-prod" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "REALTIME", "class_name": "RealtimeHub" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
       ]
     }
   }

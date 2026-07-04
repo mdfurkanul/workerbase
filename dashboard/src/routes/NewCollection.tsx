@@ -1,75 +1,24 @@
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  ArrowDown,
-  ArrowUp,
-  ChevronDown,
-  Copy,
-  KeyRound,
-  Lock,
-  Plus,
-  Settings2,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 import AuthConfig, { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/components/AuthConfig";
 import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
 import { COLLECTION_TYPES, collectionTypeMeta } from "@/lib/collectionTypes";
-import {
-  groupedFieldTypes,
-  fieldTypeMeta,
-  CATEGORY_LABELS,
-  type FieldType,
-} from "@/lib/fieldTypes";
+import type { FieldType } from "@/lib/fieldTypes";
 import type { CollectionType } from "@/lib/mockData";
 import { collectionNameSchema } from "@/lib/validation";
 import { useCollections } from "@/hooks/useCollections";
-
-/* ─── Types ──────────────────────────────────────────────────────── */
-interface FieldOpts {
-  min?: number;
-  max?: number;
-  multiple?: boolean;        // file/files
-  target?: string;           // relation target collection
-  relationType?: "single" | "multiple";
-  choices?: string[];        // select
-  includeTime?: boolean;     // date
-}
-
-interface Field {
-  /** Client-side stable id. */
-  cid: string;
-  name: string;
-  type: FieldType;
-  required: boolean;
-  unique: boolean;
-  hidden: boolean;
-  options: FieldOpts;
-  locked?: boolean;
-  primaryKey?: boolean;
-  /** Set on insert / update — never editable. */
-  auto?: boolean;
-  /** Default value applied on insert when the client omits the field. */
-  defaultValue?: string;
-}
-
-interface IndexDef {
-  cid: string;
-  name: string;
-  columns: string[];
-  unique: boolean;
-}
-
-interface ConstraintDef {
-  cid: string;
-  columns: string[];
-}
-
-/* ─── Defaults ───────────────────────────────────────────────────── */
-function uuid(): string {
-  return Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-}
+import {
+  AddFieldButton,
+  FieldRow,
+  MultiSelectColumns,
+  uuid,
+  type Field,
+  type FieldOpts,
+  type IndexDef,
+  type ConstraintDef,
+} from "@/components/fields";
 
 function makeSystemFields(): Field[] {
   return [
@@ -103,6 +52,42 @@ function makeSystemFields(): Field[] {
       hidden: false,
       options: { includeTime: true },
       auto: true,
+    },
+  ];
+}
+
+/**
+ * Auth fields shown when the collection type is "user".
+ * These are auto-injected by the backend (`email` column + virtual `password`
+ * that hashes into `password_hash`/`password_salt`/`token_key`). Shown locked
+ * so the user knows auth collections already include them — must NOT be sent
+ * in the create payload (the backend owns them).
+ */
+function makeAuthFields(): Field[] {
+  return [
+    {
+      cid: uuid(),
+      name: "email",
+      type: "text",
+      required: true,
+      unique: true,
+      hidden: false,
+      options: {},
+      locked: true,
+      auto: true,
+      authField: true,
+    },
+    {
+      cid: uuid(),
+      name: "password",
+      type: "text",
+      required: true,
+      unique: false,
+      hidden: true,
+      options: {},
+      locked: true,
+      auto: true,
+      authField: true,
     },
   ];
 }
@@ -143,8 +128,30 @@ export default function NewCollection() {
   /* ─── Field ops ─────────────────────────────────────────────────── */
   function addField(t: FieldType) {
     const f = blankField(t);
-    setFields((arr) => [...arr, f]);
+    setFields((arr) => {
+      // Insert before the trailing block of system-managed fields
+      // (auto: created/updated, authField: email/password) so they stay at the end.
+      // `id` (locked + primaryKey) is a LEADING system field and stays at index 0.
+      let insertAt = arr.length;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i]!.auto || arr[i]!.authField) insertAt = i;
+        else break;
+      }
+      const next = [...arr];
+      next.splice(insertAt, 0, f);
+      return next;
+    });
     setExpanded(f.cid);
+  }
+
+  /** Toggle collection type — auto-add/remove locked auth fields for type="user". */
+  function handleTypeChange(next: CollectionType) {
+    setType(next);
+    setFields((arr) => {
+      const withoutAuth = arr.filter((f) => !f.authField);
+      if (next === "user") return [...withoutAuth, ...makeAuthFields()];
+      return withoutAuth;
+    });
   }
 
   function patch(cid: string, p: Partial<Field>) {
@@ -188,9 +195,15 @@ export default function NewCollection() {
       const idx = arr.findIndex((f) => f.cid === cid);
       const target = idx + dir;
       if (idx < 0 || target < 0 || target >= arr.length) return arr;
-      // Don't allow moving above the locked system columns.
+      // Don't allow moving above the locked system columns (id).
       const firstEditable = arr.findIndex((f) => !f.locked);
       if (target < firstEditable) return arr;
+      // Trailing system-managed fields (auto + authField) don't move, and
+      // regular fields can't cross into the trailing block.
+      const field = arr[idx]!;
+      const targetField = arr[target]!;
+      if (field.auto || field.authField || field.locked) return arr;
+      if (targetField.auto || targetField.authField) return arr;
       const next = [...arr];
       const [item] = next.splice(idx, 1);
       next.splice(target, 0, item!);
@@ -245,18 +258,34 @@ export default function NewCollection() {
       payload.query = viewQuery;
     } else {
       // Map the internal Field type to the backend's FieldDefinition shape.
+      // Auth fields (email, password) are visual-only — backend auto-injects them.
+      // Geo fields expand to two real columns: `<name>_lat` and `<name>_lng`.
       payload.schema = fields
-        .filter((f) => f.name)
-        .map((f) => ({
-          id: f.cid,
-          name: f.name,
-          type: f.type,
-          required: f.required,
-          unique: f.unique,
-          hidden: f.hidden,
-          options: f.options,
-          ...(f.defaultValue ? { default: f.defaultValue } : {}),
-        }));
+        .filter((f) => f.name && !f.authField)
+        .flatMap((f) => {
+          if (f.type === "geo") {
+            const base = {
+              required: f.required,
+              unique: false,
+              hidden: f.hidden,
+              options: {},
+            };
+            return [
+              { id: `${f.cid}_latitude`, name: `${f.name}_latitude`, type: "real", ...base },
+              { id: `${f.cid}_longitude`, name: `${f.name}_longitude`, type: "real", ...base },
+            ];
+          }
+          return [{
+            id: f.cid,
+            name: f.name,
+            type: f.type,
+            required: f.required,
+            unique: f.unique,
+            hidden: f.hidden,
+            options: f.options,
+            ...(f.defaultValue ? { default: f.defaultValue } : {}),
+          }];
+        });
       payload.indexes = indexes.map((i) => ({
         name: i.name,
         columns: i.columns,
@@ -322,7 +351,7 @@ export default function NewCollection() {
                 </span>
                 <select
                   value={type}
-                  onChange={(e) => setType(e.target.value as CollectionType)}
+                  onChange={(e) => handleTypeChange(e.target.value as CollectionType)}
                   className="field-input mt-1"
                 >
                   {COLLECTION_TYPES.map((m) => (
@@ -382,7 +411,7 @@ export default function NewCollection() {
                     Schema · {fields.length} fields
                     {type === "user" && (
                       <span className="text-ink-faint normal-case font-normal ml-2">
-                        (auth columns auto-injected)
+                        (email &amp; password are auto-managed by the auth system)
                       </span>
                     )}
                   </span>
@@ -395,7 +424,10 @@ export default function NewCollection() {
                       key={f.cid}
                       field={f}
                       isFirstEditable={idx === fields.findIndex((x) => !x.locked)}
-                      isLast={idx === fields.length - 1}
+                      isLast={
+                        idx === fields.length - 1 ||
+                        (!!fields[idx + 1] && (!!fields[idx + 1]!.auto || !!fields[idx + 1]!.authField))
+                      }
                       expanded={expanded === f.cid}
                       onToggleExpand={() =>
                         setExpanded((cur) => (cur === f.cid ? null : f.cid))
@@ -410,13 +442,6 @@ export default function NewCollection() {
                   ))}
                 </div>
 
-                <p className="text-[12px] text-ink-faint">
-                  <span className="font-mono text-ink">id</span> is the auto-managed
-                  primary key and cannot be removed.{" "}
-                  <span className="font-mono text-ink">created</span> /{" "}
-                  <span className="font-mono text-ink">updated</span> are optional —
-                  delete or move them freely.
-                </p>
               </section>
 
               {/* Advanced — constraints + indexes */}
@@ -665,695 +690,5 @@ curl -X POST ${"https://…"}/api/collections/${"{name}"}/records ${perms.write 
         </pre>
       </div>
     </section>
-  );
-}
-
-/* ─── Add-field dropdown (grouped, grid-of-cards layout) ──────────── */
-function AddFieldButton({ onAdd }: { onAdd: (t: FieldType) => void }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const groups = useMemo(() => groupedFieldTypes(), []);
-
-  // Filter groups by the search query.
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return groups;
-    return groups
-      .map((g) => ({
-        ...g,
-        items: g.items.filter(
-          (m) =>
-            m.label.toLowerCase().includes(q) ||
-            m.value.toLowerCase().includes(q) ||
-            m.description.toLowerCase().includes(q),
-        ),
-      }))
-      .filter((g) => g.items.length > 0);
-  }, [groups, query]);
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="btn-primary text-[12px]"
-      >
-        <Plus size={12} /> Add field
-      </button>
-
-      {open && (
-        <>
-          {/* Backdrop closes the picker on outside click. */}
-          <div
-            className="fixed inset-0 z-30"
-            onMouseDown={() => {
-              setOpen(false);
-              setQuery("");
-            }}
-          />
-          <div className="absolute right-0 mt-1 w-[340px] bg-surface border border-line-strong rounded-md shadow-2xl z-40 overflow-hidden">
-            {/* Search header */}
-            <div className="px-2.5 py-2 hairline-b">
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search field types…"
-                className="field-input text-[13px]"
-              />
-            </div>
-
-            {/* Grouped grid */}
-            <div className="max-h-[360px] overflow-y-auto py-1.5 px-2 space-y-2.5">
-              {filtered.length === 0 ? (
-                <div className="px-2 py-6 text-center text-[12px] text-ink-faint">
-                  No field types match “{query}”.
-                </div>
-              ) : (
-                filtered.map((g) => (
-                  <div key={g.category}>
-                    <div className="px-1.5 pb-1">
-                      <span className="label-mono text-ink-faint">
-                        {CATEGORY_LABELS[g.category]}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1">
-                      {g.items.map((m) => {
-                        const Icon = m.Icon;
-                        return (
-                          <button
-                            key={m.value}
-                            type="button"
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              onAdd(m.value);
-                              setOpen(false);
-                              setQuery("");
-                            }}
-                            className="group flex items-start gap-2 p-2 rounded border border-transparent hover:border-brand hover:bg-brand/10 transition text-left"
-                            title={m.description}
-                          >
-                            <span className="w-7 h-7 rounded bg-surface-2 group-hover:bg-brand group-hover:text-white text-ink-muted flex items-center justify-center shrink-0 transition-colors">
-                              <Icon size={13} />
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-[12px] font-medium text-ink truncate">
-                                {m.label}
-                              </div>
-                              <div className="text-[10px] text-ink-faint truncate leading-tight">
-                                {m.description}
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ─── Single field row + expandable settings panel ────────────────── */
-function FieldRow({
-  field,
-  isFirstEditable,
-  isLast,
-  expanded,
-  onToggleExpand,
-  onPatch,
-  onPatchOpt,
-  onRemove,
-  onDuplicate,
-  onMoveUp,
-  onMoveDown,
-}: {
-  field: Field;
-  isFirstEditable: boolean;
-  isLast: boolean;
-  expanded: boolean;
-  onToggleExpand: () => void;
-  onPatch: (p: Partial<Field>) => void;
-  onPatchOpt: (p: Partial<FieldOpts>) => void;
-  onRemove: () => void;
-  onDuplicate: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
-}) {
-  const locked = !!field.locked;
-  const meta = fieldTypeMeta(field.type);
-  const Icon = meta.Icon;
-
-  return (
-    <div
-      className={`rounded border ${
-        locked ? "bg-brand-dim/30 border-brand/40" : "bg-surface border-line"
-      }`}
-    >
-      {/* Main row */}
-      <div className="grid grid-cols-[auto_1.4fr_1fr_auto] gap-2 items-center p-2">
-        {/* Drag handle / type icon */}
-        <div
-          className={`w-7 h-7 rounded flex items-center justify-center shrink-0 ${
-            locked ? "bg-brand-dim text-brand" : "bg-surface-2 text-ink-muted"
-          }`}
-        >
-          {field.primaryKey ? <KeyRound size={13} /> : <Icon size={13} />}
-        </div>
-
-        {/* Name */}
-        <input
-          required
-          disabled={locked}
-          pattern="[a-zA-Z_][a-zA-Z0-9_]*"
-          placeholder="field_name"
-          value={field.name}
-          onChange={(e) => onPatch({ name: e.target.value })}
-          className="field-input font-mono text-[13px]"
-        />
-
-        {/* Type display / select */}
-        {locked ? (
-          <span className="font-mono text-[12px] text-ink-muted uppercase tracking-widest px-2">
-            {field.auto ? "auto" : "primary"} · {field.type}
-          </span>
-        ) : (
-          <div className="flex items-center gap-1.5">
-            <select
-              value={field.type}
-              onChange={(e) => onPatch({ type: e.target.value as FieldType })}
-              className="field-input text-[13px] flex-1"
-            >
-              <FieldTypeOptions />
-            </select>
-            {field.auto && (
-              <span
-                className="badge badge-warn shrink-0"
-                title="Auto-managed by the backend"
-              >
-                AUTO
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-0.5 shrink-0">
-          {!locked && (
-            <button
-              type="button"
-              onClick={onToggleExpand}
-              className={`btn-icon ${expanded ? "text-brand" : ""}`}
-              title="Field settings"
-              aria-label="Field settings"
-            >
-              <Settings2 size={13} />
-            </button>
-          )}
-          {!locked && (
-            <>
-              <button
-                type="button"
-                onClick={onMoveUp}
-                disabled={isFirstEditable}
-                className="btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
-                title="Move up"
-              >
-                <ArrowUp size={13} />
-              </button>
-              <button
-                type="button"
-                onClick={onMoveDown}
-                disabled={isLast}
-                className="btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
-                title="Move down"
-              >
-                <ArrowDown size={13} />
-              </button>
-              <button
-                type="button"
-                onClick={onDuplicate}
-                className="btn-icon"
-                title="Duplicate"
-              >
-                <Copy size={13} />
-              </button>
-              <button
-                type="button"
-                onClick={onRemove}
-                className="btn-icon"
-                title="Remove"
-              >
-                <Trash2 size={13} />
-              </button>
-            </>
-          )}
-          {locked && (
-            <span className="px-2 text-[11px] text-ink-faint font-mono uppercase tracking-widest inline-flex items-center gap-1">
-              <Lock size={11} /> system
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Quick-toggle row (visible when collapsed, hidden when expanded for non-locked) */}
-      {!locked && !expanded && (
-        <div className="px-2 pb-2 -mt-1 flex items-center gap-3 text-[11px] text-ink-faint">
-          <label className="inline-flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={field.required}
-              onChange={(e) => onPatch({ required: e.target.checked })}
-              className="accent-brand"
-            />
-            Required
-          </label>
-          <label className="inline-flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={field.unique}
-              onChange={(e) => onPatch({ unique: e.target.checked })}
-              className="accent-brand"
-            />
-            Unique
-          </label>
-          <label className="inline-flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={field.hidden}
-              onChange={(e) => onPatch({ hidden: e.target.checked })}
-              className="accent-brand"
-            />
-            Hidden
-          </label>
-        </div>
-      )}
-
-      {/* Expanded settings panel */}
-      {!locked && expanded && (
-        <div className="px-3 pb-3 pt-1 hairline-t mt-1 space-y-3 bg-bg-elev/60">
-          <FieldSettings field={field} onPatch={onPatch} onPatchOpt={onPatchOpt} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── Settings panel — varies by type ─────────────────────────────── */
-function FieldSettings({
-  field,
-  onPatch,
-  onPatchOpt,
-}: {
-  field: Field;
-  onPatch: (p: Partial<Field>) => void;
-  onPatchOpt: (p: Partial<FieldOpts>) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      {/* Toggles */}
-      <div className="grid grid-cols-3 gap-2">
-        <ToggleCheck
-          label="Required"
-          checked={field.required}
-          onChange={(v) => onPatch({ required: v })}
-        />
-        <ToggleCheck
-          label="Unique"
-          checked={field.unique}
-          onChange={(v) => onPatch({ unique: v })}
-        />
-        <ToggleCheck
-          label="Hidden"
-          checked={field.hidden}
-          onChange={(v) => onPatch({ hidden: v })}
-        />
-      </div>
-
-      {/* Default value */}
-      <DefaultValueInput field={field} onPatch={onPatch} />
-
-      {/* Per-type options */}
-      {(field.type === "text" ||
-        field.type === "editor" ||
-        field.type === "phone" ||
-        field.type === "url" ||
-        field.type === "email") && (
-        <div className="grid grid-cols-2 gap-2">
-          <NumberInput
-            label="Min length"
-            value={field.options.min}
-            onChange={(v) => onPatchOpt({ min: v })}
-          />
-          <NumberInput
-            label="Max length"
-            value={field.options.max}
-            onChange={(v) => onPatchOpt({ max: v })}
-          />
-        </div>
-      )}
-
-      {(field.type === "integer" || field.type === "real") && (
-        <div className="grid grid-cols-2 gap-2">
-          <NumberInput
-            label="Min value"
-            value={field.options.min}
-            onChange={(v) => onPatchOpt({ min: v })}
-          />
-          <NumberInput
-            label="Max value"
-            value={field.options.max}
-            onChange={(v) => onPatchOpt({ max: v })}
-          />
-        </div>
-      )}
-
-      {field.type === "date" && (
-        <ToggleCheck
-          label="Include time"
-          checked={!!field.options.includeTime}
-          onChange={(v) => onPatchOpt({ includeTime: v })}
-        />
-      )}
-
-      {(field.type === "file" || field.type === "files") && (
-        <div className="grid grid-cols-2 gap-2">
-          <NumberInput
-            label="Max size (MB)"
-            value={field.options.max}
-            onChange={(v) => onPatchOpt({ max: v })}
-          />
-          {field.type === "files" && (
-            <NumberInput
-              label="Max files"
-              value={field.options.min}
-              onChange={(v) => onPatchOpt({ min: v })}
-            />
-          )}
-        </div>
-      )}
-
-      {field.type === "relation" && (
-        <div className="grid grid-cols-2 gap-2">
-          <label className="block">
-            <span className="label-mono">Target collection</span>
-            <input
-              list="all-collections"
-              value={field.options.target ?? ""}
-              onChange={(e) => onPatchOpt({ target: e.target.value })}
-              placeholder="users"
-              className="field-input mt-1 font-mono text-[13px]"
-            />
-            <datalist id="all-collections">
-              <option value="users" />
-              <option value="clients" />
-              <option value="posts" />
-              <option value="invoices" />
-            </datalist>
-          </label>
-          <label className="block">
-            <span className="label-mono">Cardinality</span>
-            <select
-              value={field.options.relationType ?? "single"}
-              onChange={(e) =>
-                onPatchOpt({ relationType: e.target.value as "single" | "multiple" })
-              }
-              className="field-input mt-1 text-[13px]"
-            >
-              <option value="single">Single (1:1)</option>
-              <option value="multiple">Multiple (1:N)</option>
-            </select>
-          </label>
-        </div>
-      )}
-
-      {field.type === "select" && (
-        <ChoiceEditor
-          choices={field.options.choices ?? []}
-          onChange={(choices) => onPatchOpt({ choices })}
-        />
-      )}
-
-      {field.type === "geo" && (
-        <p className="text-[12px] text-ink-faint">
-          Stores a <span className="font-mono">latitude</span> and{" "}
-          <span className="font-mono">longitude</span> pair (2REAL columns under the hood).
-        </p>
-      )}
-
-      {field.type === "json" && (
-        <p className="text-[12px] text-ink-faint">
-          Free-form JSON stored as TEXT. Validated on read.
-        </p>
-      )}
-
-      {field.type === "bool" && (
-        <p className="text-[12px] text-ink-faint">Stored as a 0/1 INTEGER column.</p>
-      )}
-    </div>
-  );
-}
-
-function ToggleCheck({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 px-3 py-2 rounded bg-surface-2 cursor-pointer text-[12px] text-ink">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="accent-brand"
-      />
-      {label}
-    </label>
-  );
-}
-
-function NumberInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value?: number;
-  onChange: (v: number | undefined) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="label-mono">{label}</span>
-      <input
-        type="number"
-        value={value ?? ""}
-        onChange={(e) =>
-          onChange(e.target.value === "" ? undefined : Number(e.target.value))
-        }
-        className="field-input mt-1 font-mono text-[13px]"
-      />
-    </label>
-  );
-}
-
-/** Default value input — adapts its control to the field type. */
-function DefaultValueInput({
-  field,
-  onPatch,
-}: {
-  field: Field;
-  onPatch: (p: Partial<Field>) => void;
-}) {
-  // Skip types where a default doesn't make sense.
-  const skip = ["file", "files", "relation", "select", "json", "geo", "editor"];
-  if (skip.includes(field.type)) {
-    return (
-      <div className="flex items-center px-3 py-2 rounded bg-surface-2 text-[11px] text-ink-faint">
-        No default for this type.
-      </div>
-    );
-  }
-
-  if (field.type === "bool") {
-    return (
-      <label className="block">
-        <span className="label-mono">Default</span>
-        <select
-          value={field.defaultValue ?? ""}
-          onChange={(e) => onPatch({ defaultValue: e.target.value || undefined })}
-          className="field-input mt-1 text-[13px]"
-        >
-          <option value="">— none —</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
-        </select>
-      </label>
-    );
-  }
-
-  const isNumeric = field.type === "integer" || field.type === "real";
-
-  return (
-    <label className="block">
-      <span className="label-mono">Default value</span>
-      <input
-        type={isNumeric ? "number" : "text"}
-        value={field.defaultValue ?? ""}
-        onChange={(e) => onPatch({ defaultValue: e.target.value || undefined })}
-        placeholder={isNumeric ? "0" : "Enter a default…"}
-        className="field-input mt-1 text-[13px]"
-      />
-    </label>
-  );
-}
-
-function ChoiceEditor({
-  choices,
-  onChange,
-}: {
-  choices: string[];
-  onChange: (next: string[]) => void;
-}) {
-  const [draft, setDraft] = useState("");
-  return (
-    <div className="space-y-2">
-      <span className="label-mono">Choices</span>
-      <div className="flex flex-wrap gap-1">
-        {choices.map((c, i) => (
-          <span
-            key={`${c}-${i}`}
-            className="inline-flex items-center gap-1 pl-2 pr-1 py-1 rounded bg-surface-2 text-[12px] font-mono"
-          >
-            {c}
-            <button
-              type="button"
-              onClick={() => onChange(choices.filter((_, j) => j !== i))}
-              className="btn-icon w-5 h-5"
-              aria-label={`Remove ${c}`}
-            >
-              <X size={10} />
-            </button>
-          </span>
-        ))}
-        {choices.length === 0 && (
-          <span className="text-[12px] text-ink-faint italic">No choices yet.</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && draft.trim()) {
-              e.preventDefault();
-              onChange([...choices, draft.trim()]);
-              setDraft("");
-            }
-          }}
-          placeholder="Type a choice, press Enter"
-          className="field-input text-[13px] flex-1"
-        />
-        <button
-          type="button"
-          onClick={() => {
-            if (!draft.trim()) return;
-            onChange([...choices, draft.trim()]);
-            setDraft("");
-          }}
-          className="btn-ghost text-[12px]"
-        >
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function FieldTypeOptions() {
-  const groups = groupedFieldTypes();
-  return (
-    <>
-      {groups.map((g) => (
-        <optgroup key={g.category} label={CATEGORY_LABELS[g.category]}>
-          {g.items.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </>
-  );
-}
-
-/* ─── Multi-select columns (for indexes / constraints) ────────────── */
-function MultiSelectColumns({
-  value,
-  options,
-  onChange,
-}: {
-  value: string[];
-  options: string[];
-  onChange: (next: string[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  return (
-    <div ref={ref} className="relative" onBlur={() => setTimeout(() => setOpen(false), 120)}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="field-input text-[12px] font-mono text-left flex items-center justify-between"
-      >
-        <span className="truncate">
-          {value.length === 0 ? (
-            <span className="text-ink-faint">Select columns…</span>
-          ) : (
-            value.join(", ")
-          )}
-        </span>
-        <ChevronDown size={12} className="text-ink-faint shrink-0" />
-      </button>
-      {open && (
-        <div className="absolute z-30 mt-1 w-full bg-surface border border-line-strong rounded shadow-2xl max-h-48 overflow-y-auto">
-          {options.length === 0 ? (
-            <div className="px-3 py-2 text-[12px] text-ink-faint">
-              Name your fields first.
-            </div>
-          ) : (
-            options.map((opt) => {
-              const checked = value.includes(opt);
-              return (
-                <label
-                  key={opt}
-                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-surface-2 cursor-pointer text-[12px] font-mono"
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() =>
-                      onChange(
-                        checked ? value.filter((v) => v !== opt) : [...value, opt],
-                      )
-                    }
-                    className="accent-brand"
-                  />
-                  {opt}
-                </label>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
   );
 }

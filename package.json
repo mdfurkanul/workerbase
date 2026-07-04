@@ -27,7 +27,10 @@
 
     "migrate:local": "npm run migrate:local --workspace backend",
     "migrate:preprod": "npm run migrate:preprod --workspace backend",
-    "migrate:prod": "npm run migrate:prod --workspace backend"
+    "migrate:prod": "npm run migrate:prod --workspace backend",
+
+    "docs": "node scripts/serve-docs.mjs",
+    "docs:open": "node scripts/serve-docs.mjs --open"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
