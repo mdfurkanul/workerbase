@@ -13,7 +13,9 @@ import {
   settingsRouter,
   exportRouter,
   importRouter,
+  backupsRouter,
 } from "./core/index.js";
+import { runAutoBackupIfNeeded } from "./core/backups/backupsRouter.js";
 
 // Re-export the DO class so Wrangler can locate it via `main`.
 export { RealtimeHub } from "./realtime/RealtimeHub.js";
@@ -42,6 +44,7 @@ app.use("*", async (c, next) => {
  *   /api/core/settings/*      — global app settings (admin)
  *   /api/core/export/*        — bulk data export (admin)
  *   /api/core/import/*        — bulk data import (admin)
+ *   /api/core/backups/*       — DB snapshot backup + time-travel restore (admin)
  */
 const core = new Hono<{ Bindings: Env }>();
 core.route("/superusers", superuserAuthRouter);
@@ -53,6 +56,7 @@ core.route("/storage", storageRouter);
 core.route("/settings", settingsRouter);
 core.route("/export", exportRouter);
 core.route("/import", importRouter);
+core.route("/backups", backupsRouter);
 
 app.route("/api/core", core);
 
@@ -77,4 +81,24 @@ app.use("/*", serveStatic({ root: "./public" }));
 // SPA fallback for client-side routing.
 app.get("/*", serveStatic({ root: "./public", path: "./index.html" }));
 
-export default app;
+// ── Scheduled entry point (Cloudflare Cron Trigger) ────────────────
+// Fires hourly per `triggers.crons` in wrangler.jsonc. Checks the
+// backups settings to decide whether an automatic snapshot is due.
+export default {
+  fetch: app.fetch,
+  scheduled: async (_event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await runAutoBackupIfNeeded(env);
+        } catch (err) {
+          // Never crash the scheduled handler — log via Workers observability.
+          console.error(
+            "auto_backup_failed",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      })(),
+    );
+  },
+};

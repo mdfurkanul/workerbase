@@ -40,6 +40,10 @@ export function ImportForm() {
   const [existingTarget, setExistingTarget] = useState<string>("");
   const [newName, setNewName] = useState<string>("");
   const [newType, setNewType] = useState<ImportNewType>("base");
+  // New-collection schema options.
+  const [newPrimaryKey, setNewPrimaryKey] = useState<string>("auto");
+  const [newAddCreatedAt, setNewAddCreatedAt] = useState<boolean>(false);
+  const [newAddUpdatedAt, setNewAddUpdatedAt] = useState<boolean>(false);
 
   // Mappings
   const [mappings, setMappings] = useState<ImportMapping[]>([]);
@@ -194,9 +198,18 @@ export function ImportForm() {
         target: {
           mode: targetMode,
           collection: targetCollection,
-          ...(targetMode === "new" ? { type: newType } : {}),
+          ...(targetMode === "new"
+            ? {
+                type: newType,
+                primaryKey: newPrimaryKey,
+                addCreatedAt: newAddCreatedAt,
+                addUpdatedAt: newAddUpdatedAt,
+              }
+            : {}),
         },
-        mappings,
+        // For mode="new" we map source→target 1:1 by name; omit explicit
+        // mappings so the backend auto-builds them from the data keys.
+        mappings: targetMode === "new" ? [] : mappings,
         data: rows,
       };
       const res = await apiClient.post<ImportResult>(`/api/core/import`, payload);
@@ -221,13 +234,23 @@ export function ImportForm() {
   }
 
   /* ── Validation ── */
-  const canProceedToMapping =
+  const canProceedFromTarget =
     rows.length > 0 &&
     (targetMode === "existing"
       ? !!existingTarget
       : newName.length > 0 && /^[a-zA-Z][a-zA-Z0-9_]*$/.test(newName));
 
   const hasMappedColumns = mappings.some((m) => m.targetColumn !== null && m.targetColumn !== "");
+
+  /** For mode="new" we skip Step 3 (column mapping) entirely — columns are
+   *  derived from the data 1:1 by name on the backend. */
+  function proceedFromTarget() {
+    if (targetMode === "new") {
+      void handleImport();
+    } else {
+      setStep(3);
+    }
+  }
 
   /* ── Step 1: Upload ── */
   if (step === 1) {
@@ -383,6 +406,53 @@ export function ImportForm() {
                   ))}
                 </div>
               </Field>
+
+              {/* Primary key strategy */}
+              <Field label="Primary key">
+                <select
+                  value={newPrimaryKey}
+                  onChange={(e) => setNewPrimaryKey(e.target.value)}
+                  className="field-input"
+                >
+                  <option value="auto">Auto-generate id column (UUID)</option>
+                  {sourceColumns.map((col) => (
+                    <option key={col} value={col}>
+                      Use "{col}" as primary key
+                    </option>
+                  ))}
+                </select>
+                <div className="text-[12px] text-ink-faint mt-1">
+                  {newPrimaryKey === "auto"
+                    ? "A new \"id\" TEXT PRIMARY KEY column is added; UUIDs are generated on insert."
+                    : `The selected column becomes PRIMARY KEY — values come from your data (must be unique).`}
+                </div>
+              </Field>
+
+              {/* Optional timestamp columns */}
+              <Field label="Timestamp columns">
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <label className="flex items-center gap-2 cursor-pointer text-[13px]">
+                    <input
+                      type="checkbox"
+                      checked={newAddCreatedAt}
+                      onChange={(e) => setNewAddCreatedAt(e.target.checked)}
+                      className="accent-[var(--brand)] w-3.5 h-3.5"
+                    />
+                    <span className="font-mono">created_at</span>
+                    <span className="text-ink-faint text-[12px]">— INTEGER defaulting to unixepoch()</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-[13px]">
+                    <input
+                      type="checkbox"
+                      checked={newAddUpdatedAt}
+                      onChange={(e) => setNewAddUpdatedAt(e.target.checked)}
+                      className="accent-[var(--brand)] w-3.5 h-3.5"
+                    />
+                    <span className="font-mono">updated_at</span>
+                    <span className="text-ink-faint text-[12px]">— INTEGER defaulting to unixepoch()</span>
+                  </label>
+                </div>
+              </Field>
             </>
           )}
 
@@ -403,11 +473,11 @@ export function ImportForm() {
           <div className="flex items-center justify-between gap-3 pt-2">
             <button onClick={() => setStep(1)} className="btn-ghost text-[12px]">← Back</button>
             <button
-              onClick={() => setStep(3)}
-              disabled={!canProceedToMapping}
+              onClick={proceedFromTarget}
+              disabled={!canProceedFromTarget || busy}
               className="btn-primary disabled:opacity-50"
             >
-              Map columns →
+              {targetMode === "new" ? "Create & import →" : "Map columns →"}
             </button>
           </div>
         </Card>

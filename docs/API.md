@@ -23,7 +23,8 @@ Base URL (prod):  your Cloudflare Worker URL
 10. [Realtime (WebSocket)](#8-realtime-websocket)
 11. [Export](#9-export)
 12. [Import](#10-import)
-13. [Maintenance Notes](#maintenance-notes)
+13. [Backups](#11-backups)
+14. [Maintenance Notes](#maintenance-notes)
 
 ---
 
@@ -526,6 +527,77 @@ File: `backend/src/core/import/importRouter.ts`
 
 ---
 
+## 11. Backups
+
+File: `backend/src/core/backups/backupsRouter.ts`
+
+Time-travel snapshots of the entire D1 database. Each backup is stored as a single JSON file in R2 under prefix `workerbase_db_backup/`. The filename embeds an ISO timestamp so R2 `list()` returns snapshots in chronological order for free.
+
+A backup captures every `table`, `view`, `index`, and `trigger` from `sqlite_master` (system tables included). Tables include their full DDL, PRAGMA `table_info`, and all rows.
+
+### `POST /api/core/backups`
+- **Auth:** Superuser JWT — **admin only**
+- **Purpose:** Snapshot the entire database to R2.
+- **Body:**
+
+| Field  | Type   | Required | Validation                                  |
+|--------|--------|----------|---------------------------------------------|
+| `name` | string | ❌       | ≤ 120 chars; `^[a-zA-Z0-9 _\-]*$`           |
+
+- **Behaviour:** Reads `sqlite_master`, fetches PRAGMA + rows for each table, JSON-stringifies, stores at `workerbase_db_backup/{ISO}_{slug-or-uuid}.json`, inserts a manifest row in `_backups` with `type='manual'`, then applies retention.
+- **Response 201:** `{ id, key, name, type, createdAt, sizeBytes, objectCount }`
+- **Response 413:** `{ error: "backup_too_large", sizeBytes, maxBytes }` — current ceiling is 45 MiB.
+
+### `GET /api/core/backups`
+- **Auth:** Superuser JWT (any role)
+- **Query:** `limit` (number, default 200, max 500)
+- **Response 200:** `{ backups: [{ id, name, type, createdAt, sizeBytes, objectCount, generatedBy }], truncated: false }`
+- **Notes:** Reads from the `_backups` manifest (sorted by `created_at DESC`).
+
+### `GET /api/core/backups/settings`
+- **Auth:** Superuser JWT (any role)
+- **Response 200:** `{ settings: { autoEnabled, intervalHours, maxRetention, lastAutoAt } }`
+
+### `PATCH /api/core/backups/settings`
+- **Auth:** Superuser JWT — **admin only**
+- **Body:** any subset of:
+
+| Field            | Type    | Validation                                |
+|------------------|---------|-------------------------------------------|
+| `autoEnabled`    | boolean | —                                         |
+| `intervalHours`  | number  | one of `1, 6, 12, 24, 168`                |
+| `maxRetention`   | number  | int, 0–10000 (0 = unlimited)              |
+
+(`lastAutoAt` is read-only — only the scheduler updates it.)
+- **Response 200:** `{ settings: { ... } }` (full post-patch settings object)
+
+### `GET /api/core/backups/:id`
+- **Auth:** Superuser JWT (any role)
+- **Path:** `id` — filename without the `workerbase_db_backup/` prefix. Must match `^[a-zA-Z0-9_\-\.]+\.json$` and contain no `..` or `/`.
+- **Response 200:** Backup JSON with `Content-Type: application/json` and `Content-Disposition: attachment`.
+
+### `DELETE /api/core/backups/:id`
+- **Auth:** Superuser JWT — **admin only**
+- **Path:** `id` — as above.
+- **Response 200:** `{ success: true }`
+- **Response 404:** `{ error: "not_found" }`
+
+### `POST /api/core/backups/:id/restore`
+- **Auth:** Superuser JWT — **admin only**
+- **Purpose:** Restore the database to the snapshot. Uses the **shadow-swap** pattern so the live DB is never partially overwritten:
+  1. **Phase 0:** drop any leftover `_wb_restore_*` shadow tables from a prior failed restore.
+  2. **Phase 1:** for each table in the snapshot, create `_wb_restore_<name>` from the stored DDL (or synthesise from PRAGMA) and bulk-insert rows in batches of ≤ 500. Live tables are untouched.
+  3. **Phase 1.5:** pre-flight — verify every shadow table exists.
+  4. **Phase 2:** single `db.batch()` that for every table issues `DROP TABLE IF EXISTS <name>` then `ALTER TABLE _wb_restore_<name> RENAME TO <name>`, then drops and recreates views / indexes / triggers from stored DDL. D1 batches run in an implicit transaction — any failure rolls back the entire batch.
+- **Response 200:** `{ restored: <objectCount>, tables: <n>, swappedAt: <iso> }`
+- **Response 500 (any phase):** `{ error, detail, phase }`. The live database is unchanged. Shadow tables may be left in place for inspection; they are cleaned up at the start of the next restore attempt.
+
+### Scheduled handler (Cron Trigger)
+- **Trigger:** wrangler `triggers.crons: ["0 * * * *"]` — fires hourly.
+- **Behaviour:** Calls `runAutoBackupIfNeeded(env)` exported from `backupsRouter.ts`. If `autoEnabled` and `now - lastAutoAt ≥ intervalHours * 3600_000`, creates a snapshot tagged `type: "auto"`, updates `lastAutoAt`, and applies retention.
+
+---
+
 ## Maintenance Notes
 
 > **When adding, removing, or modifying ANY endpoint, update this file in the same commit.**
@@ -549,3 +621,4 @@ Source-of-truth router files (under `backend/src/`):
 - `core/realtime/realtimeRouter.ts`
 - `core/export/exportRouter.ts`
 - `core/import/importRouter.ts`
+- `core/backups/backupsRouter.ts`

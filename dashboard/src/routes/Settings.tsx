@@ -5,6 +5,7 @@ import { type SectionId } from "./settings/types";
 import { SettingsNav, Breadcrumb } from "./settings/SettingsNav";
 import { ApplicationForm } from "./settings/ApplicationForm";
 import { MailForm } from "./settings/MailForm";
+import { SystemEmailsForm } from "./settings/SystemEmailsForm";
 import { StorageForm } from "./settings/StorageForm";
 import { BackupsForm } from "./settings/BackupsForm";
 import { CronsForm } from "./settings/CronsForm";
@@ -25,11 +26,20 @@ export default function Settings() {
         <SettingsNav active={active} onSelect={setActive} />
 
         <section className="overflow-y-auto">
-          <div className="max-w-2xl px-8 py-8">
+          <div
+            className={
+              active === "systemEmails"
+                ? "px-8 py-8" // full width — composer needs the room
+                : active === "backups"
+                  ? "max-w-6xl px-8 py-8"
+                  : "max-w-2xl px-8 py-8"
+            }
+          >
             <Breadcrumb section={active} />
 
             {active === "application" && <ApplicationForm />}
             {active === "mail" && <MailForm />}
+            {active === "systemEmails" && <SystemEmailsForm />}
             {active === "storage" && <StorageForm />}
             {active === "backups" && <BackupsForm />}
             {active === "crons" && <CronsForm />}

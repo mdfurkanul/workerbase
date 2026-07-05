@@ -37,6 +37,13 @@
 
   "observability": { "enabled": true },
 
+  // Hourly cron — the scheduled handler in src/index.ts reads the
+  // backups settings to decide whether an auto-snapshot is actually
+  // due (interval can be 1h / 6h / 12h / 24h / weekly from the UI).
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+
   "env": {
     // ── Local ──
     "local": {
@@ -60,7 +67,10 @@
       },
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
-      ]
+      ],
+      "triggers": {
+        "crons": ["0 * * * *"]
+      }
     },
 
     // ── Pre-production ──
@@ -85,7 +95,10 @@
       },
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
-      ]
+      ],
+      "triggers": {
+        "crons": ["0 * * * *"]
+      }
     },
 
     // ── Production ──
@@ -110,7 +123,10 @@
       },
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
-      ]
+      ],
+      "triggers": {
+        "crons": ["0 * * * *"]
+      }
     }
   }
 }

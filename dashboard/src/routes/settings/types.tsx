@@ -6,12 +6,14 @@ import {
   HardDrive,
   Home,
   Mail,
+  Mailbox,
   Upload,
 } from "lucide-react";
 
 export type SectionId =
   | "application"
   | "mail"
+  | "systemEmails"
   | "storage"
   | "backups"
   | "crons"
@@ -35,6 +37,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "application", label: "Application", icon: <Home size={13} /> },
       { id: "mail", label: "Mail settings", icon: <Mail size={13} /> },
+      { id: "systemEmails", label: "System emails", icon: <Mailbox size={13} /> },
       { id: "storage", label: "Files storage", icon: <FolderOpen size={13} /> },
       { id: "backups", label: "Backups", icon: <HardDrive size={13} /> },
       { id: "crons", label: "Crons", icon: <Clock size={13} /> },
@@ -56,6 +59,7 @@ export const NAV: NavGroup[] = [
 export const LABELS: Record<SectionId, string> = {
   application: "Application",
   mail: "Mail settings",
+  systemEmails: "System emails",
   storage: "Files storage",
   backups: "Backups",
   crons: "Crons",
