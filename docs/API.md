@@ -135,7 +135,7 @@ File: `backend/src/core/auth/superuserRouter.ts`
 
 ### `GET /api/core/superusers/me/prefs`
 - **Auth:** Superuser JWT (any role)
-- **Purpose:** Read the caller's per-user UI preferences. Stored as JSON in `_superusers.prefs` — currently `{ pinnedCollections: string[] }`, designed to grow without further migrations.
+- **Purpose:** Read the caller's per-user UI preferences. Stored as JSON in `_superusers.prefs` — currently only `pinnedCollections`. Timezone / date-format settings used to live here but have been promoted to the system-wide `_settings` table (see `/api/core/settings`) so every dashboard user sees the same value.
 - **Response 200:** `{ prefs: { pinnedCollections?: string[] } }` (returns `{ prefs: {} }` when unset)
 
 ### `PATCH /api/core/superusers/me/prefs`
@@ -143,9 +143,9 @@ File: `backend/src/core/auth/superuserRouter.ts`
 - **Purpose:** Merge-update the caller's preferences. Shallow merge — only keys present in the body are overwritten; others are preserved.
 - **Body:**
 
-| Field              | Type       | Required | Validation                                |
-|--------------------|------------|----------|-------------------------------------------|
-| `pinnedCollections`| `string[]` | ❌       | each 1–64 chars, max 100 items            |
+| Field                | Type       | Required | Validation                                |
+|----------------------|------------|----------|-------------------------------------------|
+| `pinnedCollections`  | `string[]` | ❌       | each 1–64 chars, max 100 items            |
 
 - **Response 200:** `{ prefs: { ...merged } }` (the full post-merge prefs object)
 - **Notes:** Unknown keys are silently dropped (forward-compatible). The `pinnedCollections` value replaces — does not append to — the previous list.
@@ -676,7 +676,30 @@ interface LogEntry {
 
 ---
 
-## Maintenance Notes
+## 13. Settings
+
+System-wide key/value store backed by the `_settings` table (one row per key, JSON-encoded values). Used for application config that every signed-in dashboard user should see identically — including timezone and date/time format.
+
+### `GET /api/core/settings`
+- **Auth:** Superuser JWT (any role — viewers can read)
+- **Purpose:** Returns the full settings blob. Known keys include:
+  - `installed` — install-flow sentinel (read-only; cannot be PATCHed)
+  - `appName`, `appUrl`, `accentColor`, `batchApi`, `rateLimit` — application basics
+  - `senderName`, `senderEmail`, `smtpHost`, `smtpPort`, `smtpUser`, `smtpPassword`, `smtpSecure` — mail/SMTP
+  - `backups` — `{ autoEnabled, intervalHours, maxRetention, lastAutoAt }`
+  - **`timezone`** — IANA zone (e.g. `"America/New_York"`); empty/undefined means "browser default". Drives every dashboard timestamp via `Intl.DateTimeFormat`.
+  - **`dateTimeFormat`** — one of `iso8601`, `compact`, `long`, `us`, `european`, `custom`. Dashboard preset for rendering timestamps.
+  - **`customDateTimePattern`** — token template (e.g. `"YYYY-MM-DD HH:mm"`), only consulted when `dateTimeFormat === "custom"`. Tokens: `YYYY`, `YY`, `MMMM`, `MMM`, `MM`, `DD`, `HH`, `hh`, `mm`, `ss`, `a`, `Z`, `z`. Literals wrapped in `[brackets]`.
+- **Response 200:** `{ settings: { ...all keys as JSON... } }`
+
+### `PATCH /api/core/settings`
+- **Auth:** Superuser JWT — **admin only**
+- **Purpose:** Merge-update one or more settings keys. Each value is JSON-encoded and upserted into `_settings`.
+- **Body:** any JSON object of `{ key: value }` pairs, except reserved keys (`installed`) which are silently dropped.
+- **Response 200:** `{ updated: ["key1", "key2"] }`
+- **Notes:** The `timezone` / `dateTimeFormat` / `customDateTimePattern` keys are interpreted by the dashboard as a single logical group. Patches are applied atomically via `db.batch()`. Non-admins (editor/viewer) receive 403.
+
+---
 
 > **When adding, removing, or modifying ANY endpoint, update this file in the same commit.**
 

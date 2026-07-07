@@ -250,5 +250,17 @@ export interface AppSettings {
   smtpUser?: string;
   smtpPassword?: string;
   smtpSecure?: boolean;
+  /** System-wide IANA timezone (e.g. "America/New_York"). Empty/undefined = browser default. */
+  timezone?: string;
+  /** System-wide date/time format preset. */
+  dateTimeFormat?:
+    | "iso8601"
+    | "compact"
+    | "long"
+    | "us"
+    | "european"
+    | "custom";
+  /** Token template, only consulted when `dateTimeFormat === "custom"`. */
+  customDateTimePattern?: string;
   [key: string]: unknown;
 }

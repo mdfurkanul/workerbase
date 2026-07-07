@@ -5,6 +5,7 @@ import AppShell, { PageHeader } from "@/components/AppShell";
 import Modal from "@/components/Modal";
 import { useAuth, isAdmin } from "@/hooks/useAuth";
 import { useCollections } from "@/hooks/useCollections";
+import { usePrefs } from "@/hooks/usePrefs";
 import {
   apiCreateSuperuser,
   apiDeleteUser,
@@ -15,11 +16,6 @@ import { ApiError } from "@/lib/api-client";
 import type { Superuser, SuperuserRole } from "@/lib/api-types";
 
 const ROLES: SuperuserRole[] = ["admin", "editor", "viewer"];
-
-function formatDate(ms?: number): string {
-  if (!ms) return "—";
-  return new Date(ms).toLocaleString();
-}
 
 export default function Users() {
   const { user: currentUser, loading } = useAuth();
@@ -48,6 +44,7 @@ export default function Users() {
 function UsersAdmin() {
   const { user: currentUser } = useAuth();
   const { refresh: refreshCollections } = useCollections();
+  const { formatDateTime } = usePrefs();
   const [users, setUsers] = useState<Superuser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -260,7 +257,7 @@ function UsersAdmin() {
                           </select>
                         </td>
                         <td className="px-3 py-2.5 text-ink-muted">
-                          {formatDate(u.createdAt)}
+                          {u.createdAt ? formatDateTime(u.createdAt) : "—"}
                         </td>
                         <td className="px-3 py-2.5 text-right">
                           <button

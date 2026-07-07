@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { type Collection } from "@/lib/types";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { usePrefs } from "@/hooks/usePrefs";
+import { wallClockToEpochMs } from "@/lib/dateTimeFormat";
 
 /* ─── SlideOver panel: new record ─────────────────────────────────── */
 export function NewRecordPanel({
@@ -20,6 +22,7 @@ export function NewRecordPanel({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { timezone } = usePrefs();
 
   // Filter out system / auth-managed columns. For type=user collections we
   // surface a synthetic `password` field — the backend hashes it into
@@ -82,6 +85,14 @@ export function NewRecordPanel({
           if (f.type === "integer") payload[f.name] = parseInt(v, 10);
           else if (f.type === "real") payload[f.name] = parseFloat(v);
           else if (f.type === "bool") payload[f.name] = v === "true" || v === "1";
+          else if (f.type === "datetime") {
+            // Wall-clock value typed in the user's TZ → epoch ms.
+            const ms = wallClockToEpochMs(v, timezone);
+            payload[f.name] = ms ?? v;
+          }
+          else if (f.type === "date") {
+            payload[f.name] = v.slice(0, 10);
+          }
           else payload[f.name] = v;
         }
       }
@@ -144,7 +155,11 @@ export function NewRecordPanel({
               ? "number"
               : f.type === "password"
                 ? "password"
-                : "text";
+                : f.type === "datetime"
+                  ? "datetime-local"
+                  : f.type === "date"
+                    ? "date"
+                    : "text";
           const requiredMark = f.required ? " *" : "";
           return (
           <label key={f.name} className="block">

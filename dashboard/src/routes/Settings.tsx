@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { type SectionId } from "./settings/types";
 import { SettingsNav, Breadcrumb } from "./settings/SettingsNav";
 import { ApplicationForm } from "./settings/ApplicationForm";
+import { TimezoneForm } from "./settings/TimezoneForm";
 import { MailForm } from "./settings/MailForm";
 import { SystemEmailsForm } from "./settings/SystemEmailsForm";
 import { StorageForm } from "./settings/StorageForm";
@@ -38,6 +39,7 @@ export default function Settings() {
             <Breadcrumb section={active} />
 
             {active === "application" && <ApplicationForm />}
+            {active === "timezone" && <TimezoneForm />}
             {active === "mail" && <MailForm />}
             {active === "systemEmails" && <SystemEmailsForm />}
             {active === "storage" && <StorageForm />}

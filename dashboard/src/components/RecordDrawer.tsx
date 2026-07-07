@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { Loader2, Trash2, X, Check, Pencil } from "lucide-react";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { useAuth, canEdit } from "@/hooks/useAuth";
+import { usePrefs } from "@/hooks/usePrefs";
+import {
+  epochMsToWallClock,
+  wallClockToEpochMs,
+  looksLikeEpochSeconds,
+} from "@/lib/dateTimeFormat";
 import Modal from "@/components/Modal";
 
 interface Props {
@@ -19,9 +25,32 @@ interface Props {
 const PROTECTED_COLS = new Set(["id", "created_at", "updated_at", "rowid", "token_key", "password_hash", "password_salt"]);
 
 /** Convert a raw DB value to the string representation used in edit inputs. */
-function valueToString(value: unknown, type?: string): string {
-  if (value === null || value === undefined) return "";
+function valueToString(value: unknown, type: string | undefined, timezone: string | undefined): string {
+  if (value === null || value === undefined || value === "") return "";
   if (type === "bool") return value === true || value === 1 ? "true" : "false";
+  if (type === "datetime") {
+    // Stored as epoch ms (or epoch seconds in collection-system columns).
+    const n =
+      typeof value === "number"
+        ? value
+        : typeof value === "string" && /^\d+$/.test(value)
+          ? parseInt(value, 10)
+          : NaN;
+    if (!Number.isNaN(n)) {
+      const ms = looksLikeEpochSeconds(n) ? n * 1000 : n;
+      return epochMsToWallClock(ms, timezone);
+    }
+    // Fall through: ISO string or other — let the input parse natively.
+    if (typeof value === "string" && /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) {
+      const d = new Date(value);
+      if (!Number.isNaN(d.getTime())) return epochMsToWallClock(d.getTime(), timezone);
+    }
+    return String(value);
+  }
+  if (type === "date") {
+    // Stored as TEXT yyyy-MM-dd — keep the user-typed form.
+    return typeof value === "string" ? value.slice(0, 10) : String(value);
+  }
   return String(value);
 }
 
@@ -37,6 +66,7 @@ export default function RecordDrawer({
 }: Props) {
   const { user } = useAuth();
   const allowEdit = canEdit(user) && !readOnly;
+  const { timezone, formatDateTime } = usePrefs();
   const [record, setRecord] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -68,7 +98,7 @@ export default function RecordDrawer({
           for (const [k, v] of Object.entries(r)) {
             if (!PROTECTED_COLS.has(k)) {
               const fieldDef = schema.find((f) => f.name === k);
-              ev[k] = valueToString(v, fieldDef?.type);
+              ev[k] = valueToString(v, fieldDef?.type, timezone);
             }
           }
           setEditValues(ev);
@@ -83,7 +113,7 @@ export default function RecordDrawer({
           for (const [k, v] of Object.entries(r)) {
             if (!PROTECTED_COLS.has(k)) {
               const fieldDef = schema.find((f) => f.name === k);
-              ev[k] = valueToString(v, fieldDef?.type);
+              ev[k] = valueToString(v, fieldDef?.type, timezone);
             }
           }
           setEditValues(ev);
@@ -92,7 +122,7 @@ export default function RecordDrawer({
         }
       })
       .finally(() => setLoading(false));
-  }, [open, recordId, collectionName, snapshot, schema]);
+  }, [open, recordId, collectionName, snapshot, schema, timezone]);
 
   // Esc to close.
   useEffect(() => {
@@ -161,9 +191,22 @@ export default function RecordDrawer({
       const payload: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(editValues)) {
         const fieldDef = schema.find((f) => f.name === k);
-        if (fieldDef?.type === "integer") payload[k] = parseInt(v, 10);
-        else if (fieldDef?.type === "real") payload[k] = parseFloat(v);
-        else if (fieldDef?.type === "bool") payload[k] = v === "true";
+        const raw = (v ?? "").trim();
+        if (fieldDef?.type === "integer") payload[k] = parseInt(raw, 10);
+        else if (fieldDef?.type === "real") payload[k] = parseFloat(raw);
+        else if (fieldDef?.type === "bool") payload[k] = raw === "true";
+        else if (fieldDef?.type === "datetime") {
+          // User typed a wall-clock value in their TZ; convert to epoch ms.
+          // Empty string is preserved as-is so the user can clear the field.
+          if (raw === "") payload[k] = "";
+          else {
+            const ms = wallClockToEpochMs(raw, timezone);
+            payload[k] = ms ?? raw; // fall back to raw string if unparseable
+          }
+        }
+        else if (fieldDef?.type === "date") {
+          payload[k] = raw.slice(0, 10); // normalise to yyyy-MM-dd
+        }
         else payload[k] = v;
       }
       await apiClient.patch(
@@ -274,7 +317,15 @@ export default function RecordDrawer({
                         </select>
                       ) : (
                         <input
-                          type={fieldDef?.type === "integer" || fieldDef?.type === "real" ? "number" : "text"}
+                          type={
+                            fieldDef?.type === "integer" || fieldDef?.type === "real"
+                              ? "number"
+                              : fieldDef?.type === "datetime"
+                                ? "datetime-local"
+                                : fieldDef?.type === "date"
+                                  ? "date"
+                                  : "text"
+                          }
                           value={editValues[key] ?? ""}
                           onChange={(e) => { setEditValues((ev) => ({ ...ev, [key]: e.target.value })); setEditErrors((ee) => ({ ...ee, [key]: "" })); }}
                           placeholder={currentVal === null ? "null" : String(currentVal)}
@@ -289,14 +340,17 @@ export default function RecordDrawer({
             ) : (
               /* ── Read mode ── */
               <dl className="bg-surface border border-line rounded divide-y divide-line">
-                {Object.entries(record).map(([key, value]) => (
-                  <div key={key} className="grid grid-cols-[140px_1fr] gap-3 px-3 py-2.5 items-start">
-                    <dt className="font-mono text-[12px] text-ink-muted pt-0.5">{key}</dt>
-                    <dd className="text-[13px] break-words">
-                      <DetailValue value={value} />
-                    </dd>
-                  </div>
-                ))}
+                {Object.entries(record).map(([key, value]) => {
+                  const fieldDef = schema.find((f) => f.name === key);
+                  return (
+                    <div key={key} className="grid grid-cols-[140px_1fr] gap-3 px-3 py-2.5 items-start">
+                      <dt className="font-mono text-[12px] text-ink-muted pt-0.5">{key}</dt>
+                      <dd className="text-[13px] break-words">
+                        <DetailValue value={value} fieldType={fieldDef?.type} formatDateTime={formatDateTime} />
+                      </dd>
+                    </div>
+                  );
+                })}
               </dl>
             )
           ) : (
@@ -387,9 +441,28 @@ export default function RecordDrawer({
   );
 }
 
-function DetailValue({ value }: { value: unknown }) {
+function DetailValue({
+  value,
+  fieldType,
+  formatDateTime,
+}: {
+  value: unknown;
+  fieldType?: string;
+  formatDateTime: (input: unknown) => string;
+}) {
   if (value === null || value === undefined || value === "") {
     return <span className="text-ink-faint">N/A</span>;
+  }
+  if (fieldType === "datetime") {
+    const formatted = formatDateTime(value);
+    if (formatted && formatted !== String(value)) {
+      return (
+        <span className="font-mono text-ink break-all" title={String(value)}>
+          {formatted}
+        </span>
+      );
+    }
+    return <span className="break-all">{String(value)}</span>;
   }
   if (typeof value === "boolean") {
     return value ? (

@@ -14,6 +14,7 @@ import Settings from "@/routes/Settings";
 import Users from "@/routes/Users";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { CollectionsProvider } from "@/hooks/useCollections";
+import { PrefsProvider } from "@/hooks/usePrefs";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -31,6 +32,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           element={
             <ProtectedRoute>
               <CollectionsProvider>
+                <PrefsProvider>
               <Routes>
                 <Route path="/" element={<Overview />} />
                 {/* New-collection flow stays on its own path. */}
@@ -47,6 +49,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
+                </PrefsProvider>
               </CollectionsProvider>
             </ProtectedRoute>
           }

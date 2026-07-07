@@ -4,11 +4,12 @@
  * The backend (sqlite_master + PRAGMA table_info) is the SINGLE source of
  * truth for the collection list, names, and schemas. Nothing in this file
  * filters, adds, or renames collections. Only genuine per-user UI
- * preferences live here: pinned collections, visible-column choices, and
- * permission-rule drafts.
+ * preferences live here: pinned collections, visible-column choices,
+ * permission-rule drafts, and the timezone/date-format prefs cache.
  */
 
 const PINNED_KEY = "workerbase.pinnedCollections";
+const TIMEZONE_PREFS_KEY = "workerbase.timezonePrefs";
 const COLUMNS_PREFIX = "workerbase.columns.";
 const PERMISSIONS_PREFIX = "workerbase.permissions.";
 
@@ -58,6 +59,38 @@ export function setPinnedCollectionsLocal(names: string[]): void {
 
 export function isPinned(name: string): boolean {
   return getPinnedCollections().includes(name);
+}
+
+/* ─── Timezone + date/time format prefs (local cache) ────────────── */
+//
+// Source of truth: `_superusers.prefs.{timezone, dateTimeFormat,
+// customDateTimePattern}` on the backend. localStorage is used only as a
+// fast cache so the first paint shows the user's chosen zone/format
+// instead of flashing UTC + ISO 8601 while the network round-trip runs.
+// Writes go through `usePrefs().patch`, which calls the backend and then
+// mirrors the server-confirmed result here.
+export interface TimezonePrefsCache {
+  timezone?: string;
+  dateTimeFormat?: string;
+  customDateTimePattern?: string;
+}
+
+export function getTimezonePrefs(): TimezonePrefsCache | null {
+  return readJson<TimezonePrefsCache | null>(TIMEZONE_PREFS_KEY, null);
+}
+
+/** Overwrite the local cache. Called by `usePrefs` after a backend sync
+ *  or successful patch. Mirrors the remote result. */
+export function setTimezonePrefsLocal(prefs: TimezonePrefsCache): void {
+  writeJson(TIMEZONE_PREFS_KEY, prefs);
+}
+
+export function clearTimezonePrefs(): void {
+  try {
+    localStorage.removeItem(TIMEZONE_PREFS_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**

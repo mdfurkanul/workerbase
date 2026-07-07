@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
+import { usePrefs } from "@/hooks/usePrefs";
+import { looksLikeEpochSeconds } from "@/lib/dateTimeFormat";
 
 interface Column<T> {
   key: string;
@@ -122,10 +124,44 @@ export function DataTable<T extends { id: string }>({
 }
 
 /** Renders a cell value with sensible formatting: null → N/A, bool → badge, etc. */
-export function Cell({ value }: { value: unknown }) {
+export function Cell({
+  value,
+  fieldType,
+}: {
+  value: unknown;
+  /**
+   * Pass `"datetime"` to render numeric (epoch ms/s) or ISO string values
+   * through the user's TZ-aware formatter. Pass `"date"` for ISO date strings.
+   * Omit for plain values.
+   */
+  fieldType?: string;
+}) {
+  const { formatDateTime } = usePrefs();
+
   if (value === null || value === undefined || value === "") {
     return <span className="text-ink-faint">N/A</span>;
   }
+
+  // Datetime fields — epoch ms, epoch seconds, or ISO string — formatted
+  // through the user's prefs so every table renders the same TZ + preset.
+  if (fieldType === "datetime") {
+    const formatted = formatDateTime(value);
+    if (formatted && formatted !== String(value)) {
+      return (
+        <span className="font-mono text-ink-muted whitespace-nowrap" title={String(value)}>
+          {formatted}
+        </span>
+      );
+    }
+    return <span className="text-ink">{String(value)}</span>;
+  }
+
+  // `date` fields — stored as TEXT (yyyy-MM-dd). Render as-is so users see
+  // exactly what they entered; the wall-clock value is the canonical form.
+  if (fieldType === "date") {
+    return <span className="font-mono text-ink-muted whitespace-nowrap">{String(value)}</span>;
+  }
+
   if (typeof value === "boolean") {
     return value ? (
       <span className="badge badge-ok">true</span>
@@ -138,5 +174,21 @@ export function Cell({ value }: { value: unknown }) {
       <img src={value} alt="" className="w-7 h-7 rounded-full object-cover" />
     );
   }
+
+  // Bare numeric epoch (created_at/updated_at columns) — best-effort format.
+  if (
+    typeof value === "number" &&
+    (looksLikeEpochSeconds(value) || value > 1e12)
+  ) {
+    const formatted = formatDateTime(value);
+    if (formatted && formatted !== String(value)) {
+      return (
+        <span className="font-mono text-ink-muted whitespace-nowrap" title={String(value)}>
+          {formatted}
+        </span>
+      );
+    }
+  }
+
   return <span className="text-ink">{String(value)}</span>;
 }

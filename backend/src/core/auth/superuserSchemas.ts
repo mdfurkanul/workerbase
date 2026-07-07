@@ -44,8 +44,31 @@ export const updateRoleSchema = z.object({
 });
 
 /**
- * Per-user UI preferences. Currently only `pinnedCollections`, but the
- * shape is intentionally extensible — future prefs (theme, density,
+ * Date/time format presets consumed by the dashboard. Each maps to an
+ * `Intl.DateTimeFormat` option set in `dashboard/src/lib/dateTimeFormat.ts`.
+ *
+ * NOTE: these presets + the chosen timezone are stored system-wide in the
+ * `_settings` table (see `/api/core/settings`), NOT per-user. Every
+ * signed-in dashboard user sees the same zone/format. Only `custom` is a
+ * real preset value here; the matching pattern lives under the
+ * `customDateTimePattern` settings key.
+ */
+export const DATE_TIME_FORMATS = [
+  "iso8601",
+  "compact",
+  "long",
+  "us",
+  "european",
+  "custom",
+] as const;
+export type DateTimeFormat = (typeof DATE_TIME_FORMATS)[number];
+
+/**
+ * Per-user UI preferences. Intentionally narrow — only genuinely
+ * personal UI state lives here. System-wide concerns (timezone, date
+ * format) live in `_settings` so every user sees the same value.
+ *
+ * The shape is intentionally extensible — future prefs (theme, density,
  * saved filters) can be added without a migration or schema change.
  *
  * The PATCH endpoint does a shallow merge, so callers may send any

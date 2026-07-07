@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { usePrefs } from "@/hooks/usePrefs";
 import { Card } from "./primitives";
 import Toggle from "@/components/Toggle";
 
@@ -68,40 +69,6 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function formatAbsolute(iso: string | null): string {
-  if (!iso) return "Unknown date";
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function formatRelative(iso: string | null): string {
-  if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const diffMs = Date.now() - then;
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return "just now";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
-  const month = Math.floor(day / 30);
-  if (month < 12) return `${month}mo ago`;
-  return `${Math.floor(month / 12)}y ago`;
-}
-
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
     if (typeof err.detail === "string") return err.detail;
@@ -130,6 +97,7 @@ function BackupCard({
 }) {
   const isNamed = backup.name && backup.name.length > 0;
   const isAuto = backup.type === "auto";
+  const { formatDateTime, formatRelative } = usePrefs();
 
   return (
     <li className="relative flex gap-4">
@@ -173,7 +141,7 @@ function BackupCard({
             </div>
             <div className="mt-1 flex items-center gap-2 text-[12px] text-ink-muted flex-wrap">
               <Clock size={12} />
-              <span>{formatAbsolute(backup.createdAt)}</span>
+              <span>{formatDateTime(backup.createdAt)}</span>
               <span className="text-ink-faint">·</span>
               <span>{formatRelative(backup.createdAt)}</span>
               {backup.generatedBy && (
@@ -241,6 +209,7 @@ function SettingsCard({
   error: string | null;
 }) {
   const [draft, setDraft] = useState<BackupsSettings>(settings);
+  const { formatDateTime, formatRelative } = usePrefs();
 
   // Re-sync when the parent's loaded settings change.
   useEffect(() => {
@@ -313,7 +282,7 @@ function SettingsCard({
         <div className="text-[12px] text-ink-faint">
           Last automatic snapshot:{" "}
           <span className="font-mono text-ink-muted">
-            {formatAbsolute(new Date(settings.lastAutoAt).toISOString())}
+            {formatDateTime(new Date(settings.lastAutoAt).toISOString())}
           </span>{" "}
           ({formatRelative(new Date(settings.lastAutoAt).toISOString())})
         </div>
@@ -354,6 +323,7 @@ function RestoreDialog({
   const expected = (backup.name || "").trim();
   const [typed, setTyped] = useState("");
   const needsType = expected.length > 0;
+  const { formatDateTime } = usePrefs();
 
   return (
     <ModalShell onClose={onClose} title="Restore snapshot">
@@ -364,7 +334,7 @@ function RestoreDialog({
             <div className="font-medium">This replaces the entire database.</div>
             <div className="mt-1 text-[12px] text-ink-muted">
               All collections, records, settings, and users created after{" "}
-              <span className="font-mono">{formatAbsolute(backup.createdAt)}</span>{" "}
+              <span className="font-mono">{formatDateTime(backup.createdAt)}</span>{" "}
               will be lost. The current state cannot be recovered unless you
               take a new backup first.
             </div>
@@ -425,13 +395,14 @@ function DeleteDialog({
   onConfirm: () => void;
   busy: boolean;
 }) {
+  const { formatDateTime } = usePrefs();
   return (
     <ModalShell onClose={onClose} title="Delete snapshot">
       <div className="space-y-3 text-[13px] text-ink">
         <p>
           Delete snapshot{" "}
           <span className="font-mono">{backup.name || backup.id}</span> from{" "}
-          {formatAbsolute(backup.createdAt)}? This cannot be undone.
+          {formatDateTime(backup.createdAt)}? This cannot be undone.
         </p>
       </div>
       <div className="mt-5 flex items-center justify-end gap-2">

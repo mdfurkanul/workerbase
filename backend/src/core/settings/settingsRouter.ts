@@ -81,7 +81,17 @@ settingsRouter.patch("/", requireAuth, requireRole("admin"), async (c) => {
     return c.json({ error: "settings_persist_failed", detail: msg }, 500);
   }
 
-  return c.json({ updated: entries.map(([k]) => k) });
+  // Re-read the full settings blob so callers can reconcile state without
+  // a follow-up GET. Mirrors the `/me/prefs` PATCH response shape.
+  const { results } = await c.env.SYSTEM_DB
+    .prepare(`SELECT key, value FROM _settings`)
+    .all<{ key: string; value: string | null }>();
+  const after: Record<string, unknown> = {};
+  for (const row of results ?? []) {
+    if (!row.key) continue;
+    after[row.key] = row.value == null ? null : safeParse(row.value);
+  }
+  return c.json({ settings: after, updated: entries.map(([k]) => k) });
 });
 
 /* ── helpers ─────────────────────────────────────────────────────── */

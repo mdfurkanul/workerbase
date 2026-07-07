@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 import { apiClient } from "@/lib/api-client";
+import { usePrefs } from "@/hooks/usePrefs";
 import type { LogEntry, LogLevel } from "@/lib/api-types";
 
 interface LogsResponse {
@@ -20,6 +21,7 @@ export default function Logs() {
   const [level, setLevel] = useState<LogLevel | "">("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const { formatDateTime } = usePrefs();
 
   async function load() {
     setLoading(true);
@@ -101,9 +103,7 @@ export default function Logs() {
                     const lvl = (e.level ?? "info").toLowerCase();
                     const status = e.status ?? 0;
                     const duration = e.durationMs ?? 0;
-                    const at = e.createdAt
-                      ? new Date(e.createdAt).toISOString().replace("T", " ").slice(0, 19)
-                      : "";
+                    const at = e.createdAt ? formatDateTime(e.createdAt) : "";
                     return (
                       <div
                         key={e.id ?? i}

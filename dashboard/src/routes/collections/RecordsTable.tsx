@@ -109,7 +109,7 @@ export function RecordsTable({
         f.name === "id" ? (
           <span className="font-mono text-ink-muted">{r.id ?? r[f.name]}</span>
         ) : (
-          <Cell value={r[f.name]} />
+          <Cell value={r[f.name]} fieldType={f.type} />
         ),
     }));
 

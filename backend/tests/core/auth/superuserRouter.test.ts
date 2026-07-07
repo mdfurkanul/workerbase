@@ -574,12 +574,22 @@ describe("PATCH /api/core/superusers/me/prefs (prefsPatchSchema)", () => {
     expect(r.success).toBe(false);
   });
 
-  // 6. Edge case — unknown keys are silently dropped (Zod strips by default)
+  // 6. Edge case — unknown keys are silently dropped (Zod strips by default).
+  //    Timezone + dateTimeFormat used to live here; they've been promoted
+  //    to the system-wide `_settings` table, so any caller still sending
+  //    them gets the keys stripped instead of an error.
   it("strips unknown keys (forward-compatible schema)", () => {
-    const r = prefsPatchSchema.safeParse({ pinnedCollections: ["x"], theme: "dark" });
+    const r = prefsPatchSchema.safeParse({
+      pinnedCollections: ["x"],
+      theme: "dark",
+      timezone: "America/New_York",
+      dateTimeFormat: "us",
+    });
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data).not.toHaveProperty("theme");
+      expect(r.data).not.toHaveProperty("timezone");
+      expect(r.data).not.toHaveProperty("dateTimeFormat");
       expect(r.data.pinnedCollections).toEqual(["x"]);
     }
   });
