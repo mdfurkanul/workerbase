@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { FieldType } from "@/lib/fieldTypes";
-import type { CollectionType } from "@/lib/mockData";
+import type { CollectionType } from "@/lib/types";
 import {
   uuid,
   type Field,

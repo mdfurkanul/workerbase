@@ -8,7 +8,7 @@ import SlideOver from "@/components/SlideOver";
 import Modal from "@/components/Modal";
 import { useCollections } from "@/hooks/useCollections";
 import { useAuth, isAdmin, canEdit } from "@/hooks/useAuth";
-import { type Collection } from "@/lib/mockData";
+import { type Collection } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 import { collectionAllowsRecordEdits } from "./helpers";
 import { RecordsTable } from "./RecordsTable";

@@ -171,33 +171,33 @@ export function FieldRow({
       {/* Quick-toggle row (collapsed, non-locked, non-auto) */}
       {!locked && !field.auto && !expanded && (
         <div className="px-2 pb-2 -mt-1 flex items-center gap-3 text-[11px] text-ink-faint">
-          <label className="inline-flex items-center gap-1 cursor-pointer">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-ink-muted">
             <input
               type="checkbox"
               checked={field.required}
               onChange={(e) => onPatch({ required: e.target.checked })}
-              className="accent-brand"
+              className="w-3.5 h-3.5 rounded-sm accent-[var(--brand)] cursor-pointer"
             />
             Required
           </label>
           {field.type !== "geo" && (
-            <label className="inline-flex items-center gap-1 cursor-pointer">
+            <label className="inline-flex items-center gap-1.5 cursor-pointer text-ink-muted">
               <input
                 type="checkbox"
                 checked={field.unique}
                 onChange={(e) => onPatch({ unique: e.target.checked })}
-                className="accent-brand"
+                className="w-3.5 h-3.5 rounded-sm accent-[var(--brand)] cursor-pointer"
               />
               Unique
             </label>
           )}
           {field.type !== "geo" && (
-            <label className="inline-flex items-center gap-1 cursor-pointer">
+            <label className="inline-flex items-center gap-1.5 cursor-pointer text-ink-muted">
               <input
                 type="checkbox"
                 checked={field.hidden}
                 onChange={(e) => onPatch({ hidden: e.target.checked })}
-                className="accent-brand"
+                className="w-3.5 h-3.5 rounded-sm accent-[var(--brand)] cursor-pointer"
               />
               Hidden
             </label>

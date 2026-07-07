@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { hashPassword, verifyPassword, signToken, verifyToken, hashTokenValue } from "../../../src/auth/crypto.js";
 import { requireRole } from "../../../src/auth/middleware.js";
+import { prefsPatchSchema } from "../../../src/core/auth/superuserSchemas.js";
 
 const TEST_SECRET = "a".repeat(64);
 
@@ -534,5 +535,59 @@ describe("JWT role claim", () => {
 
     const verified = await verifyToken(token, TEST_SECRET);
     expect(verified?.role).toBe("admin");
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   PATCH /api/core/superusers/me/prefs — per-user UI preferences
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("PATCH /api/core/superusers/me/prefs (prefsPatchSchema)", () => {
+  // 1. Happy path — pinnedCollections array of valid names
+  it("accepts a valid pinnedCollections array", () => {
+    const r = prefsPatchSchema.safeParse({ pinnedCollections: ["posts", "comments"] });
+    expect(r.success).toBe(true);
+  });
+
+  // 2. Happy path — empty body (no-op merge)
+  it("accepts an empty object (no-op patch)", () => {
+    const r = prefsPatchSchema.safeParse({});
+    expect(r.success).toBe(true);
+  });
+
+  // 3. Validation failure — wrong type for pinnedCollections
+  it("rejects a non-array pinnedCollections", () => {
+    const r = prefsPatchSchema.safeParse({ pinnedCollections: "posts" });
+    expect(r.success).toBe(false);
+  });
+
+  // 4. Validation failure — empty string inside the array (invalid name)
+  it("rejects an empty string in pinnedCollections", () => {
+    const r = prefsPatchSchema.safeParse({ pinnedCollections: ["posts", ""] });
+    expect(r.success).toBe(false);
+  });
+
+  // 5. Edge case — over the 100-item cap
+  it("rejects more than 100 pinned collections", () => {
+    const tooMany = Array.from({ length: 101 }, (_, i) => `c${i}`);
+    const r = prefsPatchSchema.safeParse({ pinnedCollections: tooMany });
+    expect(r.success).toBe(false);
+  });
+
+  // 6. Edge case — unknown keys are silently dropped (Zod strips by default)
+  it("strips unknown keys (forward-compatible schema)", () => {
+    const r = prefsPatchSchema.safeParse({ pinnedCollections: ["x"], theme: "dark" });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data).not.toHaveProperty("theme");
+      expect(r.data.pinnedCollections).toEqual(["x"]);
+    }
+  });
+
+  // 7. Edge case — names over 64 chars are rejected (matches NAME_RE ceiling)
+  it("rejects a collection name over 64 chars", () => {
+    const longName = "a".repeat(65);
+    const r = prefsPatchSchema.safeParse({ pinnedCollections: [longName] });
+    expect(r.success).toBe(false);
   });
 });

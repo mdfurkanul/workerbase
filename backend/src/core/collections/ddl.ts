@@ -22,6 +22,71 @@ export const AUTH_COLUMNS = [
  *  to prevent "duplicate column name" errors. */
 export const AUTH_RESERVED_COLUMNS = new Set(AUTH_COLUMNS.map((c) => c.name));
 
+/**
+ * Standard system-managed columns present on every base/user collection table.
+ * These are added by `renderCreateTable` and are filtered out of the
+ * user-authored schema at create time. We re-merge them into the schema
+ * returned by the metadata API so the dashboard sees the full table shape
+ * (otherwise a collection with a single user field would show only that
+ * one column — the id/created_at/updated_at columns would be invisible).
+ *
+ * Marked `system: true` so the migration diff logic protects them from
+ * being dropped and so the UI can render them read-only.
+ */
+export interface SystemColumn {
+  id: string;
+  name: string;
+  type: string;
+  required: boolean;
+  unique: boolean;
+  hidden: boolean;
+  system: true;
+  auto?: boolean;
+  primaryKey?: boolean;
+  options: Record<string, unknown>;
+}
+
+export const SYSTEM_COLUMNS_FULL: SystemColumn[] = [
+  {
+    id: "sys_id",
+    name: "id",
+    type: "text",
+    required: true,
+    unique: true,
+    hidden: false,
+    system: true,
+    primaryKey: true,
+    options: {},
+  },
+  {
+    id: "sys_created_at",
+    name: "created_at",
+    type: "datetime",
+    required: true,
+    unique: false,
+    hidden: false,
+    system: true,
+    auto: true,
+    options: { includeTime: true },
+  },
+  {
+    id: "sys_updated_at",
+    name: "updated_at",
+    type: "datetime",
+    required: true,
+    unique: false,
+    hidden: false,
+    system: true,
+    auto: true,
+    options: { includeTime: true },
+  },
+];
+
+/** Minimal `{ name, type }` projection of the system columns — used by
+ *  endpoints that only return column metadata (not the full FieldDefinition). */
+export const SYSTEM_COLUMNS: { name: string; type: string }[] =
+  SYSTEM_COLUMNS_FULL.map((c) => ({ name: c.name, type: c.type }));
+
 /** Tables hidden from the dashboard collection list. */
 export const HIDDEN = new Set([
   "_collections",
@@ -59,12 +124,20 @@ export function renderColumnDef(field: { name: string; type: string; required?: 
   if (field.required) parts.push("NOT NULL");
   if (field.unique) parts.push("UNIQUE");
   if (field.default !== undefined && field.default !== null) {
-    if (typeof field.default === "string") {
-      parts.push(`DEFAULT '${field.default.replace(/'/g, "''")}'`);
-    } else if (typeof field.default === "boolean") {
-      parts.push(`DEFAULT ${field.default ? 1 : 0}`);
-    } else {
-      parts.push(`DEFAULT ${field.default}`);
+    // Dynamic date/datetime defaults ($now, $nowOnUpdate) are resolved by the
+    // record routers at write time — never emit them as a SQL DEFAULT.
+    const isDynamicDate =
+      typeof field.default === "string" &&
+      (field.type === "date" || field.type === "datetime") &&
+      (field.default === "$now" || field.default === "$nowOnUpdate");
+    if (!isDynamicDate) {
+      if (typeof field.default === "string") {
+        parts.push(`DEFAULT '${field.default.replace(/'/g, "''")}'`);
+      } else if (typeof field.default === "boolean") {
+        parts.push(`DEFAULT ${field.default ? 1 : 0}`);
+      } else {
+        parts.push(`DEFAULT ${field.default}`);
+      }
     }
   }
   return parts.join(" ");

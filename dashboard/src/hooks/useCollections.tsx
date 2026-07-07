@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Collection } from "@/lib/mockData";
+import type { Collection } from "@/lib/types";
 import { apiListCollections } from "@/lib/api-collections";
 
 interface UseCollections {

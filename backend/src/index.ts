@@ -14,6 +14,9 @@ import {
   exportRouter,
   importRouter,
   backupsRouter,
+  logsRouter,
+  recordRequest,
+  levelFromStatus,
 } from "./core/index.js";
 import { runAutoBackupIfNeeded } from "./core/backups/backupsRouter.js";
 
@@ -30,6 +33,31 @@ app.use("*", async (c, next) => {
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
   c.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   c.header("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+});
+
+// ── Request logging ───────────────────────────────────────────────
+// One row per API request, written via waitUntil so the response is
+// never blocked. Trim+persist logic lives in `recordRequest`.
+app.use("/api/*", async (c, next) => {
+  const start = Date.now();
+  await next();
+  // Skip static asset paths — only API traffic is interesting.
+  const path = new URL(c.req.url).pathname;
+  if (!path.startsWith("/api/")) return;
+  const status = c.res.status ?? 200;
+  const durationMs = Date.now() - start;
+  c.executionCtx.waitUntil(
+    recordRequest(c.env, {
+      level: levelFromStatus(status),
+      method: c.req.method,
+      path,
+      status,
+      durationMs,
+      ip: c.req.header("CF-Connecting-IP") ?? c.req.header("X-Forwarded-For") ?? null,
+      userAgent: c.req.header("User-Agent") ?? null,
+      error: null,
+    }),
+  );
 });
 
 /**
@@ -57,6 +85,7 @@ core.route("/settings", settingsRouter);
 core.route("/export", exportRouter);
 core.route("/import", importRouter);
 core.route("/backups", backupsRouter);
+core.route("/logs", logsRouter);
 
 app.route("/api/core", core);
 

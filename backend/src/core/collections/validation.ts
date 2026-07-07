@@ -10,6 +10,53 @@ export const READONLY_COLUMNS = new Set([
   "rowid",
 ]);
 
+/**
+ * Sentinel default values for date/datetime fields. Stored on `Field.default`
+ * and resolved to the current unix timestamp by the record routers at write
+ * time (NOT rendered into DDL — SQL DEFAULT cannot refresh on UPDATE).
+ *
+ *   $now             → set once, when the row is inserted ("on-created").
+ *   $nowOnUpdate     → set on insert AND refreshed on every UPDATE ("on-updated").
+ *
+ * Mirrored in the dashboard at
+ * `dashboard/src/components/fields/DefaultValueInput.ts`.
+ */
+export const DEFAULT_NOW = "$now";
+export const DEFAULT_NOW_ON_UPDATE = "$nowOnUpdate";
+
+export function isDynamicDateDefault(v: unknown): boolean {
+  return v === DEFAULT_NOW || v === DEFAULT_NOW_ON_UPDATE;
+}
+
+/**
+ * Build a {column → nowSeconds} map for fields whose default should be
+ * auto-applied at this write moment.
+ *
+ *   - INSERT  →  $now and $nowOnUpdate both fire.
+ *   - UPDATE  →  only $nowOnUpdate fires (auto-refresh).
+ *
+ * Caller then merges this map into the cleaned payload (existing client
+ * values for these columns are overwritten — that's the point of an
+ * on-update timestamp).
+ */
+export function pickDynamicDefaults(
+  schemaFields: FieldDefinition[] | null,
+  mode: "insert" | "update",
+  nowSeconds: number,
+): Record<string, number> {
+  if (!schemaFields) return {};
+  const out: Record<string, number> = {};
+  for (const f of schemaFields) {
+    if (f.type !== "date" && f.type !== "datetime") continue;
+    if (mode === "insert" && (f.default === DEFAULT_NOW || f.default === DEFAULT_NOW_ON_UPDATE)) {
+      out[f.name] = nowSeconds;
+    } else if (mode === "update" && f.default === DEFAULT_NOW_ON_UPDATE) {
+      out[f.name] = nowSeconds;
+    }
+  }
+  return out;
+}
+
 /** Auth-managed columns — writable only by the auth flow, not the admin
  *  record editor. The dashboard hides them; the API rejects them on write. */
 export const AUTH_MANAGED_COLUMNS = new Set([

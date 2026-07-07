@@ -1,13 +1,35 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, ArrowUpRight, Boxes, Database, Server, Users } from "lucide-react";
 import AppShell from "@/components/AppShell";
-import { APP_VERSION } from "@/lib/mockData";
+import { APP_VERSION } from "@/lib/types";
 import { useCollections } from "@/hooks/useCollections";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
 import TypeBadge from "@/components/TypeBadge";
+import { apiClient } from "@/lib/api-client";
+import type { LogEntry } from "@/lib/api-types";
+
+interface LogsResponse {
+  items: LogEntry[];
+  page: number;
+  perPage: number;
+  total: number;
+  totalPages: number;
+}
 
 export default function Overview() {
   const { collections, loading, error, refresh } = useCollections();
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logsLoading, setLogsLoading] = useState(true);
+
+  useEffect(() => {
+    setLogsLoading(true);
+    apiClient
+      .get<LogsResponse>("/api/core/logs", { perPage: 8 })
+      .then((r) => setLogs(r.items ?? []))
+      .catch(() => setLogs([]))
+      .finally(() => setLogsLoading(false));
+  }, [collections]);
 
   const totalRecords = collections.reduce((s, c) => s + (c.count ?? 0), 0);
   const userCollections = collections.filter((c) => c.type === "user").length;
@@ -83,33 +105,59 @@ export default function Overview() {
           )}
         </section>
 
-        {/* Activity feed */}
+        {/* Activity feed — driven by the real `_logs` table */}
         <section className="bg-surface border border-line rounded">
           <header className="px-4 py-3 hairline-b flex items-center gap-2">
             <Activity size={14} className="text-brand" />
             <span className="label-mono">Recent activity</span>
+            <Link
+              to="/logs"
+              className="ml-auto text-[11px] text-ink-faint hover:text-ink font-mono uppercase tracking-widest"
+            >
+              View all
+            </Link>
           </header>
           <ul className="px-4 py-2 space-y-2 text-[13px]">
-            {[
-              ["post", "created in", "posts", "2m ago"],
-              ["user", "signed in to", "members", "11m ago"],
-              ["migration", "applied to", "D1", "1h ago"],
-              ["view", "refreshed", "top_posts", "3h ago"],
-            ].map(([verb, prep, target, when], i) => (
-              <li key={i} className="flex items-center justify-between gap-2">
-                <span className="text-ink-muted truncate">
-                  <span className="font-mono text-ink">{verb}</span> {prep}{" "}
-                  <span className="font-mono text-brand">{target}</span>
-                </span>
-                <span className="text-ink-faint text-[11px] whitespace-nowrap">{when}</span>
+            {logsLoading ? (
+              <li className="text-ink-faint text-[12px] py-2">Loading…</li>
+            ) : logs.length === 0 ? (
+              <li className="text-ink-faint text-[12px] py-2 italic">
+                No activity yet — API requests will appear here in real time.
               </li>
-            ))}
+            ) : (
+              logs.map((e) => (
+                <li key={e.id} className="flex items-center justify-between gap-2">
+                  <span className="text-ink-muted truncate font-mono text-[12px]">
+                    <span className={e.status >= 500 ? "text-err" : e.status >= 400 ? "text-warn" : "text-ink"}>
+                      {e.method}
+                    </span>{" "}
+                    <span className="text-ink-muted">{e.path}</span>
+                    <span className="text-ink-faint"> · {e.status}</span>
+                  </span>
+                  <span className="text-ink-faint text-[11px] whitespace-nowrap">
+                    {formatRelative(e.createdAt)}
+                  </span>
+                </li>
+              ))
+            )}
           </ul>
         </section>
       </div>
       </div>
     </AppShell>
   );
+}
+
+/** Format a unix-ms timestamp as a compact relative string ("3m ago", "2h ago"). */
+function formatRelative(ms: number): string {
+  const secs = Math.max(1, Math.floor((Date.now() - ms) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }
 
 function Stat({ label, value, icon }: { label: string; value: string | number; icon: React.ReactNode }) {

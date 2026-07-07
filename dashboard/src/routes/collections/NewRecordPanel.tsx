@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { type Collection } from "@/lib/mockData";
+import { type Collection } from "@/lib/types";
 import { apiClient, ApiError } from "@/lib/api-client";
 
 /* ─── SlideOver panel: new record ─────────────────────────────────── */

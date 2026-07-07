@@ -10,7 +10,9 @@ import {
   updateEmailSchema,
   changePasswordSchema,
   updateRoleSchema,
+  prefsPatchSchema,
   normalizeRole,
+  type SuperuserPrefs,
 } from "./superuserSchemas.js";
 
 /**
@@ -19,6 +21,8 @@ import {
  *
  * Routes:
  *   GET    /me
+ *   GET    /me/prefs
+ *   PATCH  /me/prefs
  *   POST   /create
  *   GET    /list
  *   GET    /:id
@@ -68,6 +72,72 @@ managementRouter.get("/me", requireAuth, async (c) => {
       updatedAt: row.updated_at,
     },
   });
+});
+
+// ─────────────────────────────────────────────────────────────
+//  Preferences (per-user UI state — currently pinned collections)
+//  Stored as JSON in `_superusers.prefs`. Read returns {} when unset.
+// ─────────────────────────────────────────────────────────────
+
+/** Parse the stored `prefs` JSON safely. Returns {} on any error / null. */
+function parsePrefs(raw: string | null): SuperuserPrefs {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return typeof v === "object" && v !== null ? (v as SuperuserPrefs) : {};
+  } catch {
+    return {};
+  }
+}
+
+managementRouter.get("/me/prefs", requireAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+
+  const row = await c.env.SYSTEM_DB
+    .prepare(`SELECT prefs FROM _superusers WHERE id = ?`)
+    .bind(user.sub)
+    .first<{ prefs: string | null }>();
+
+  if (!row) return c.json({ error: "user_not_found" }, 404);
+
+  return c.json({ prefs: parsePrefs(row.prefs) });
+});
+
+managementRouter.patch("/me/prefs", requireAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+
+  let body: unknown;
+  try {
+    const raw = await c.req.text();
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  const parsed = prefsPatchSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "validation_failed", issues: parsed.error.flatten() }, 400);
+  }
+
+  // Load existing prefs, merge, persist.
+  const row = await c.env.SYSTEM_DB
+    .prepare(`SELECT prefs FROM _superusers WHERE id = ?`)
+    .bind(user.sub)
+    .first<{ prefs: string | null }>();
+  if (!row) return c.json({ error: "user_not_found" }, 404);
+
+  const current = parsePrefs(row.prefs);
+  const next: SuperuserPrefs = { ...current, ...parsed.data };
+  const now = Date.now();
+
+  await c.env.SYSTEM_DB
+    .prepare(`UPDATE _superusers SET prefs = ?, updated_at = ? WHERE id = ?`)
+    .bind(JSON.stringify(next), now, user.sub)
+    .run();
+
+  return c.json({ prefs: next });
 });
 
 // ─────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import {
   AUTH_RESERVED_COLUMNS,
   HIDDEN,
   NAME_RE,
+  SYSTEM_COLUMNS,
   assertIdentifier,
   isSafeSelectQuery,
   renderCreateTable,
@@ -33,6 +34,74 @@ import {
 } from "./schemas.js";
 
 export const metadataRouter = new Hono<{ Bindings: Env }>();
+
+/**
+ * Prepend the standard system-managed columns (id, created_at, updated_at)
+ * to a returned schema. The system columns are always auto-managed by DDL
+ * — they exist on every base/user table even when absent from the stored
+ * `_collections.schema` JSON. If a user-defined field happens to share a
+ * system name (e.g. legacy "id" column), the system shape wins because
+ * that's what the physical table actually contains — the user's version
+ * was filtered out at create time by `isReserved()`.
+ */
+export function mergeSystemColumns<T extends { name: string; type: string }>(
+  schema: T[],
+): T[] {
+  const sysNames: Set<string> = new Set(SYSTEM_COLUMNS.map((c) => c.name));
+  const userFields = schema.filter((f) => !sysNames.has(f.name));
+  // The SYSTEM_COLUMNS constant is `{ name, type }` only — cast back to T
+  // since the dashboard treats schema entries as opaque column descriptors.
+  return [...SYSTEM_COLUMNS, ...userFields] as unknown as T[];
+}
+
+/** Escape a literal string for safe embedding inside a RegExp constructor. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Pure helper — given the OTHER collections' metadata rows and the old
+ * name being renamed away from, return a list of human-readable reasons
+ * the rename must be refused. Empty array = safe to rename.
+ *
+ * Exported for unit tests; the live PATCH handler calls this with rows
+ * fetched from `_collections`.
+ */
+export function findRenameReferences(
+  rows: { name: string; schema: string | null; query: string | null }[],
+  oldName: string,
+): string[] {
+  const blockedBy: string[] = [];
+  for (const r of rows) {
+    // relation check (base/user only — schema holds field defs)
+    if (r.schema) {
+      try {
+        const fields = JSON.parse(r.schema) as {
+          name?: string;
+          type?: string;
+          options?: { targetCollection?: string };
+        }[];
+        const refs = fields.some(
+          (f) => f.type === "relation" && f.options?.targetCollection === oldName,
+        );
+        if (refs) {
+          blockedBy.push(`${r.name} (relation)`);
+          continue;
+        }
+      } catch {
+        /* malformed schema — skip */
+      }
+    }
+    // view query check — conservative word-boundary match
+    if (r.query) {
+      const re = new RegExp(`\\b${escapeRegex(oldName)}\\b`, "i");
+      if (re.test(r.query)) {
+        blockedBy.push(`${r.name} (view query)`);
+      }
+    }
+  }
+  return blockedBy;
+}
 
 metadataRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
   let body: unknown;
@@ -270,7 +339,14 @@ metadataRouter.get("/", requireAuth, async (c) => {
         // Prefer the stored schema (richer — has FieldDefinition metadata
         // like required/unique/hidden) when present, otherwise fall back
         // to the PRAGMA-derived shape.
-        const schema = meta?.schema ?? pragmaSchema;
+        const baseSchema = meta?.schema ?? pragmaSchema;
+        // System columns (id, created_at, updated_at) are auto-managed by DDL
+        // and intentionally excluded from the stored schema. Re-merge them in
+        // so the dashboard sees the full table shape (views don't have them).
+        const isViewCollection = (meta?.type ?? "") === "view";
+        const schema = isViewCollection
+          ? baseSchema
+          : mergeSystemColumns(baseSchema);
         const declaredType = meta?.type ?? (source === "system" ? "system" : "base");
         return {
           id: `${source}__${name}`,
@@ -340,6 +416,11 @@ metadataRouter.get("/:name", requireAuth, async (c) => {
           return { name: row.name, type: (row.type || "text").toLowerCase() };
         });
     } catch { /* leave schema empty */ }
+  }
+  // Re-merge the auto-managed system columns (id, created_at, updated_at)
+  // for base/user tables. Views don't have them.
+  if (declaredType !== "view") {
+    schema = mergeSystemColumns(schema);
   }
 
   return c.json({
@@ -445,6 +526,68 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
   }
   const spec = parsed.data;
 
+  // ── Rename handling ─────────────────────────────────────────────
+  // If `name` is present and differs from the current name, we run an
+  // ALTER TABLE/VIEW rename. Refused when:
+  //   - target name already exists in _collections
+  //   - another collection references the old name via a relation field
+  //   - any view query mentions the old name (heuristic, conservative)
+  let renamedTo: string | null = null;
+  if (typeof (spec as { name?: unknown }).name === "string") {
+    const requested = (spec as { name: string }).name;
+    if (requested !== name) {
+      // 1. Target must not already exist.
+      const clash = await c.env.SYSTEM_DB
+        .prepare(`SELECT 1 FROM _collections WHERE name = ? LIMIT 1`)
+        .bind(requested)
+        .first();
+      if (clash) {
+        return c.json({ error: "rename_target_exists", target: requested }, 409);
+      }
+
+      // 2. Scan every OTHER collection for references to the old name.
+      //    Relations store targetCollection in the schema JSON; views
+      //    embed the name in their SQL query.
+      const allRows = await c.env.SYSTEM_DB
+        .prepare(`SELECT name, schema, query FROM _collections WHERE name != ?`)
+        .bind(name)
+        .all<{ name: string; schema: string | null; query: string | null }>();
+
+      const blockedBy = findRenameReferences(allRows.results ?? [], name);
+      if (blockedBy.length > 0) {
+        return c.json(
+          {
+            error: "rename_blocked_by_references",
+            referencedBy: blockedBy,
+            hint: "Update or remove the references first, then rename.",
+          },
+          409,
+        );
+      }
+
+      // 3. Execute the rename.
+      try {
+        if (existing.type === "view") {
+          // SQLite has no ALTER VIEW RENAME — must drop + recreate under the new name.
+          await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${name}"`);
+          await c.env.SYSTEM_DB.exec(renderCreateView(requested, existing.query ?? ""));
+        } else {
+          await c.env.SYSTEM_DB.exec(
+            `ALTER TABLE "${name}" RENAME TO "${requested}"`,
+          );
+        }
+        renamedTo = requested;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return c.json({ error: "rename_failed", detail: msg }, 500);
+      }
+    }
+  }
+
+  // The table name used by downstream migration / view-recreate steps.
+  // After a rename, all DDL must target the NEW name.
+  const effectiveName = renamedTo ?? name;
+
   let migrationResult: { applied: number; errors: string[] } | null = null;
 
   // For base/user: run schema diff if a new schema was provided.
@@ -453,9 +596,9 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
       ? (JSON.parse(existing.schema) as FieldDefinition[])
       : [];
     const newFields = (spec as { schema: FieldDefinition[] }).schema;
-    const ops = diffSchema(name, oldFields, newFields);
+    const ops = diffSchema(effectiveName, oldFields, newFields);
     if (ops.length > 0) {
-      migrationResult = await applyMigration(c.env.SYSTEM_DB, name, ops);
+      migrationResult = await applyMigration(c.env.SYSTEM_DB, effectiveName, ops);
     }
   }
 
@@ -473,8 +616,8 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
         return c.json({ error: "invalid_view_query", detail: explainErr }, 400);
       }
       try {
-        await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${name}"`);
-        await c.env.SYSTEM_DB.exec(renderCreateView(name, newQuery));
+        await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${effectiveName}"`);
+        await c.env.SYSTEM_DB.exec(renderCreateView(effectiveName, newQuery));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return c.json({ error: "view_recreate_failed", detail: msg }, 500);
@@ -507,11 +650,12 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
 
   await c.env.SYSTEM_DB.prepare(
     `UPDATE _collections
-        SET schema = ?, query = ?, indexes = ?, constraints = ?,
+        SET ${renamedTo ? `name = ?, ` : ""}schema = ?, query = ?, indexes = ?, constraints = ?,
             list_rule = ?, view_rule = ?, create_rule = ?, update_rule = ?, delete_rule = ?,
             auth_config = ?, email_templates = ?, updated_at = ?
       WHERE id = ?`,
   ).bind(
+    ...(renamedTo ? [renamedTo] : []),
     schemaJson,
     queryVal,
     indexesJson,
@@ -529,7 +673,8 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
 
   return c.json({
     id: existing.id,
-    name,
+    name: effectiveName,
+    renamedFrom: renamedTo ? name : undefined,
     type: existing.type,
     updated_at: now,
     migrations: migrationResult ?? { applied: 0, errors: [] },

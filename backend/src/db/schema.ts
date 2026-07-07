@@ -169,6 +169,8 @@ export const superusers = sqliteTable("_superusers", {
   tokenKey: text("token_key").notNull().default(""),
   role: text("role").$type<SuperuserRole>().notNull().default("admin"),
   verified: integer("verified", { mode: "boolean" }).notNull().default(false),
+  /** Per-user UI preferences (JSON). Currently: { pinnedCollections: string[] }. */
+  prefs: text("prefs"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });

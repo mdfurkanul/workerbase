@@ -133,6 +133,23 @@ File: `backend/src/core/auth/superuserRouter.ts`
 - **Auth:** Superuser JWT (any role)
 - **Response 200:** `{ user: { id, email, role, verified, createdAt, updatedAt } }`
 
+### `GET /api/core/superusers/me/prefs`
+- **Auth:** Superuser JWT (any role)
+- **Purpose:** Read the caller's per-user UI preferences. Stored as JSON in `_superusers.prefs` — currently `{ pinnedCollections: string[] }`, designed to grow without further migrations.
+- **Response 200:** `{ prefs: { pinnedCollections?: string[] } }` (returns `{ prefs: {} }` when unset)
+
+### `PATCH /api/core/superusers/me/prefs`
+- **Auth:** Superuser JWT (any role)
+- **Purpose:** Merge-update the caller's preferences. Shallow merge — only keys present in the body are overwritten; others are preserved.
+- **Body:**
+
+| Field              | Type       | Required | Validation                                |
+|--------------------|------------|----------|-------------------------------------------|
+| `pinnedCollections`| `string[]` | ❌       | each 1–64 chars, max 100 items            |
+
+- **Response 200:** `{ prefs: { ...merged } }` (the full post-merge prefs object)
+- **Notes:** Unknown keys are silently dropped (forward-compatible). The `pinnedCollections` value replaces — does not append to — the previous list.
+
 ### `POST /api/core/superusers/create`
 - **Auth:** Superuser JWT — **admin only**
 - **Body:**
@@ -240,20 +257,43 @@ File: `backend/src/core/collections/collectionsRouter.ts`
 
 - **Response 201:** `{ id, name, type, created_at }`
 
+#### Field default values (date / datetime)
+
+A `date` or `datetime` field's `default` may be one of these sentinel strings instead of a literal:
+
+| `default` value  | Meaning                                                                 |
+|------------------|-------------------------------------------------------------------------|
+| `""` / undefined | Empty — no automatic value. Client must supply one (or it stays NULL).  |
+| `"$now"`         | **On-create.** Set to current unix timestamp on INSERT; never touched on UPDATE. |
+| `"$nowOnUpdate"` | **On-update.** Set on INSERT AND refreshed to "now" on every UPDATE.   |
+
+These sentinels are **not** rendered into the SQL `DEFAULT` clause (SQLite cannot re-evaluate it per-update). The admin and public record routers (`backend/src/core/collections/recordsRouter.ts`, `backend/src/core/records/recordsRouter.ts`) inject them at write time via `pickDynamicDefaults()`. Client-supplied values for these columns win on INSERT; on UPDATE the `$nowOnUpdate` value always refreshes.
+
 ### `GET /api/core/collections`
 - **Auth:** Superuser JWT (any role)
 - **Response 200:** `{ collections: [{ id, name, type, source, schema, count }] }`
+
+> The returned `schema` always includes the auto-managed system columns (`id`, `created_at`, `updated_at`) for `base`/`user` collections, prepended to the user-defined fields. They are filtered out of the stored `_collections.schema` JSON at create time (they're added by DDL) and re-merged on read so the dashboard sees the full table shape.
 
 ### `GET /api/core/collections/:name`
 - **Auth:** Superuser JWT (any role)
 - **Path:** `name` (collection name or `_underscore` system table)
 - **Response 200:** `{ collection: { id, name, type, source, schema, count } }`
 
+> Same system-column merge applies to the single-collection response.
+
 ### `PATCH /api/core/collections/:name`
 - **Auth:** Superuser JWT — **admin only**
 - **Path:** `name`
 - **Body:** Same shape as POST but all top-level fields optional (per `type`). Schema changes trigger migration via `diffSchema()` + `applyMigration()`.
-- **Response 200:** `{ id, name, type, updated_at, migrations: { applied, errors } }`
+- **Renaming:** If the optional top-level `name` field differs from the path `:name`, the backend runs `ALTER TABLE "old" RENAME TO "new"` (or `DROP VIEW` + `CREATE VIEW` for `type=view`) and updates `_collections.name`. The rename is **refused** (409) when:
+  - the target name already exists in `_collections` (`rename_target_exists`)
+  - another collection has a `relation` field with `options.targetCollection === oldName`
+  - any view query contains the old name as a word-boundary match (`rename_blocked_by_references`)
+
+  The handler never rewrites view queries or relation targets automatically — those must be updated first so the operation stays predictable.
+- **Response 200:** `{ id, name, renamedFrom?, type, updated_at, migrations: { applied, errors } }` (`renamedFrom` present only when a rename occurred)
+- **Response 409:** `{ error: "rename_target_exists" | "rename_blocked_by_references", target?, referencedBy?, hint? }`
 
 ### `DELETE /api/core/collections/:name`
 - **Auth:** Superuser JWT — **admin only** (blocks system tables)
@@ -595,6 +635,44 @@ A backup captures every `table`, `view`, `index`, and `trigger` from `sqlite_mas
 ### Scheduled handler (Cron Trigger)
 - **Trigger:** wrangler `triggers.crons: ["0 * * * *"]` — fires hourly.
 - **Behaviour:** Calls `runAutoBackupIfNeeded(env)` exported from `backupsRouter.ts`. If `autoEnabled` and `now - lastAutoAt ≥ intervalHours * 3600_000`, creates a snapshot tagged `type: "auto"`, updates `lastAutoAt`, and applies retention.
+
+---
+
+## 12. Logs
+
+Every API request (`/api/*`) is logged to the `_logs` table by a request-logging middleware in `src/index.ts`. Writes happen in the background via `c.executionCtx.waitUntil(...)` so they never block the response. Level is derived from the response status (`info` < 400, `warn` 400–499, `error` ≥ 500). Retention is capped at 5,000 rows (auto-trimmed after each insert).
+
+### `GET /api/core/logs`
+- **Auth:** Superuser JWT (any role)
+- **Query:**
+
+| Param   | Type   | Default | Notes                                            |
+|---------|--------|---------|--------------------------------------------------|
+| `page`  | number | 1       | ≥ 1                                              |
+| `perPage` | number | 50    | 1–100                                            |
+| `level` | enum   | —       | optional filter: `info` \| `warn` \| `error`    |
+
+- **Response 200:** `{ items: LogEntry[], page, perPage, total, totalPages }`
+
+```ts
+interface LogEntry {
+  id: string;
+  level: "info" | "warn" | "error";
+  method: string;      // "GET", "POST", ...
+  path: string;        // "/api/core/..."
+  status: number;
+  durationMs: number;
+  ip: string | null;
+  userAgent: string | null;
+  error: string | null;
+  createdAt: number;   // unix ms
+}
+```
+
+### `DELETE /api/core/logs`
+- **Auth:** Superuser JWT — **admin only**
+- **Behaviour:** Clears all rows from `_logs`.
+- **Response 200:** `{ success: true }`
 
 ---
 

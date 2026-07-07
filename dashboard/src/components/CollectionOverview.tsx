@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Plus, Minus, Shield, X } from "lucide-react";
 import TypeBadge from "@/components/TypeBadge";
-import type { Collection } from "@/lib/mockData";
+import type { Collection } from "@/lib/types";
 import { collectionTypeMeta } from "@/lib/collectionTypes";
 import { useAuth, isAdmin } from "@/hooks/useAuth";
 
@@ -16,13 +16,39 @@ const HEADER_H = 38;
 const FIELD_H = 26;
 const FOOTER_H = 24;
 
+interface RelationEdge {
+  from: string;
+  fromField: string;
+  to: string;
+  toField: string;
+}
+
 /**
- * Foreign-key relations between collections. Currently empty — real
- * relation metadata will be derived from schema `relation` field types
- * once the backend exposes it. The diagram still renders cards and
- * fields; only the connecting lines are absent until then.
+ * Derive FK edges by scanning every collection's schema for fields of
+ * type "relation" with an `options.targetCollection`. The target's PK
+ * ("id") is the implied `toField` — the dashboard doesn't yet model
+ * composite targets.
+ *
+ * `toField` defaults to "id" because that's the only PK the backend
+ * auto-creates on every collection (see renderCreateTable).
  */
-const RELATIONS: { from: string; fromField: string; to: string; toField: string }[] = [];
+function deriveRelations(
+  collections: Collection[],
+  visibleNames: Set<string>,
+): RelationEdge[] {
+  const out: RelationEdge[] = [];
+  for (const c of collections) {
+    if (!visibleNames.has(c.name)) continue;
+    for (const f of c.schema ?? []) {
+      if (f.type !== "relation") continue;
+      const opts = (f as unknown as { options?: { targetCollection?: string } }).options;
+      const target = opts?.targetCollection;
+      if (!target || !visibleNames.has(target)) continue;
+      out.push({ from: c.name, fromField: f.name, to: target, toField: "id" });
+    }
+  }
+  return out;
+}
 
 /**
  * System tables are anything prefixed with "_" (e.g. _superusers,
@@ -62,6 +88,17 @@ export default function CollectionOverview({ open, onClose, collections }: Props
     return [...userTables, ...systemTables];
   }, [collections, showSystem]);
 
+  // Derive FK edges from live schema metadata — recomputed when the
+  // visible collection set changes.
+  const visibleNames = useMemo(
+    () => new Set(visible.map((c) => c.name)),
+    [visible],
+  );
+  const RELATIONS = useMemo(
+    () => deriveRelations(collections, visibleNames),
+    [collections, visibleNames],
+  );
+
   if (!open) return null;
 
   return (
@@ -79,7 +116,7 @@ export default function CollectionOverview({ open, onClose, collections }: Props
           <div className="flex items-center gap-3">
             <span className="font-display italic text-xl">Collection overview</span>
             <span className="label-mono text-ink-faint">
-              {visible.length} of {collections.length} shown
+              {visible.length} of {collections.length} shown · {RELATIONS.length} relations
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -113,7 +150,7 @@ export default function CollectionOverview({ open, onClose, collections }: Props
         {/* Body */}
         <div className="flex-1 relative overflow-hidden bg-bg">
           {tab === "fields" ? (
-            <FieldsDiagram collections={visible} zoom={zoom} />
+            <FieldsDiagram collections={visible} relations={RELATIONS} zoom={zoom} />
           ) : (
             <RulesList collections={visible} />
           )}
@@ -171,9 +208,11 @@ function ZoomBtn({
 /* ─── Fields diagram (draggable cards + relations) ────────────────── */
 function FieldsDiagram({
   collections,
+  relations,
   zoom,
 }: {
   collections: Collection[];
+  relations: RelationEdge[];
   zoom: number;
 }) {
   // Initialise a deterministic grid layout; persists for the modal's lifetime.
@@ -263,7 +302,7 @@ function FieldsDiagram({
 
   // Filter relations to those whose endpoints are both visible.
   const visibleNames = new Set(collections.map((c) => c.name));
-  const relations = RELATIONS.filter(
+  const visibleRelations = relations.filter(
     (r) => visibleNames.has(r.from) && visibleNames.has(r.to),
   );
 
@@ -327,7 +366,7 @@ function FieldsDiagram({
             </marker>
           </defs>
 
-          {relations.map((r, i) => {
+          {visibleRelations.map((r, i) => {
             const from = positions[r.from];
             const to = positions[r.to];
             if (!from || !to) return null;
@@ -373,6 +412,7 @@ function FieldsDiagram({
           <CollectionCard
             key={c.id ?? c.name}
             collection={c}
+            relations={visibleRelations}
             position={positions[c.name] ?? { x: 0, y: 0 }}
             onDragStart={(e) => startDrag(e, c.name)}
             dragging={draggingName === c.name}
@@ -385,11 +425,13 @@ function FieldsDiagram({
 
 function CollectionCard({
   collection,
+  relations,
   position,
   onDragStart,
   dragging,
 }: {
   collection: Collection;
+  relations: RelationEdge[];
   position: Pt;
   onDragStart: (e: React.MouseEvent) => void;
   dragging: boolean;
@@ -442,7 +484,7 @@ function CollectionCard({
             <li className="px-3 py-2 text-[12px] text-ink-faint italic">No fields defined.</li>
           )}
           {fields.map((f) => {
-            const isRel = RELATIONS.some(
+            const isRel = relations.some(
               (r) =>
                 (r.from === collection.name && r.fromField === f.name) ||
                 (r.to === collection.name && r.toField === f.name),

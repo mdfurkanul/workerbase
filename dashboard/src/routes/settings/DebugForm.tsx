@@ -6,7 +6,7 @@ import {
   Gauge,
   Shield,
 } from "lucide-react";
-import { APP_VERSION } from "@/lib/mockData";
+import { APP_VERSION } from "@/lib/types";
 import { Card } from "./primitives";
 
 export function DebugForm({ email }: { email?: string }) {

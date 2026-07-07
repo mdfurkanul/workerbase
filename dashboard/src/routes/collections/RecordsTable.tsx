@@ -7,7 +7,7 @@ import RecordDrawer from "@/components/RecordDrawer";
 import SelectionBar from "@/components/SelectionBar";
 import Modal from "@/components/Modal";
 import { useAuth, canEdit } from "@/hooks/useAuth";
-import { type Record as Row, type Collection } from "@/lib/mockData";
+import { type Record as Row, type Collection } from "@/lib/types";
 import { apiClient } from "@/lib/api-client";
 import { collectionAllowsRecordEdits } from "./helpers";
 

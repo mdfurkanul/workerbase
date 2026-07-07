@@ -29,6 +29,7 @@ import type {
 } from "../../db/schema.js";
 import { verifyToken } from "../../auth/crypto.js";
 import { verifyCollectionToken } from "../../auth/collectionToken.js";
+import { pickDynamicDefaults } from "../collections/validation.js";
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -272,7 +273,9 @@ recordsRouter.post("/:name/records", async (c) => {
   const filtered = filterWriteFields(body, collection.schema);
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-  const data: Record<string, unknown> = { ...filtered, id, created_at: now, updated_at: now };
+  // Auto-fill dynamic date defaults ($now / $nowOnUpdate). Client values win.
+  const dynamicDefaults = pickDynamicDefaults(collection.schema, "insert", now);
+  const data: Record<string, unknown> = { ...dynamicDefaults, ...filtered, id, created_at: now, updated_at: now };
 
   const cols = Object.keys(data);
   if (cols.length === 0) {
@@ -347,7 +350,11 @@ recordsRouter.patch("/:name/records/:id", async (c) => {
   delete filtered.id;
   delete filtered.created_at;
   delete filtered.updated_at;
-  filtered.updated_at = Math.floor(Date.now() / 1000);
+  // Refresh any $nowOnUpdate date fields on every write.
+  const updateNow = Math.floor(Date.now() / 1000);
+  const dynamicRefresh = pickDynamicDefaults(collection.schema, "update", updateNow);
+  for (const [k, v] of Object.entries(dynamicRefresh)) filtered[k] = v;
+  filtered.updated_at = updateNow;
 
   const sets = Object.keys(filtered).map((k) => `"${k}" = ?`);
   const values = Object.values(filtered);

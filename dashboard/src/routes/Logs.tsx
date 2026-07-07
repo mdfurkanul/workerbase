@@ -1,49 +1,35 @@
 import { useEffect, useState } from "react";
 import AppShell, { PageHeader } from "@/components/AppShell";
 import { apiClient } from "@/lib/api-client";
+import type { LogEntry, LogLevel } from "@/lib/api-types";
 
-interface LogRow {
-  id?: string | null;
-  level?: string | null;
-  method?: string | null;
-  path?: string | null;
-  status?: number | null;
-  duration_ms?: number | null;
-  duration?: number | null;
-  ip?: string | null;
-  user_agent?: string | null;
-  error?: string | null;
-  created_at?: number | null;
+interface LogsResponse {
+  items: LogEntry[];
+  page: number;
+  perPage: number;
+  total: number;
+  totalPages: number;
 }
 
-interface ExecuteResult {
-  ok: boolean;
-  columns?: string[];
-  rows?: LogRow[];
-  rowCount?: number;
-  error?: string;
-}
-
-const LOGS_QUERY = "SELECT * FROM _logs ORDER BY created_at DESC LIMIT 50";
+const PER_PAGE = 50;
 
 export default function Logs() {
-  const [rows, setRows] = useState<LogRow[]>([]);
+  const [rows, setRows] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [level, setLevel] = useState<LogLevel | "">("");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiClient.post<ExecuteResult>("/api/core/sql/execute", {
-        sql: LOGS_QUERY,
-      });
-      if (res.ok) {
-        setRows(res.rows ?? []);
-      } else {
-        setError(res.error ?? "Failed to load logs");
-        setRows([]);
-      }
+      const query: Record<string, unknown> = { page, perPage: PER_PAGE };
+      if (level) query.level = level;
+      const res = await apiClient.get<LogsResponse>("/api/core/logs", query);
+      setRows(res.items ?? []);
+      setTotalPages(res.totalPages ?? 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");
       setRows([]);
@@ -54,16 +40,31 @@ export default function Logs() {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [page, level]);
 
   return (
     <AppShell>
       <PageHeader
         breadcrumbs={[<span>Logs</span>]}
         actions={
-          <button onClick={() => void load()} className="btn-ghost text-[12px]">
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={level}
+              onChange={(e) => {
+                setLevel(e.target.value as LogLevel | "");
+                setPage(1);
+              }}
+              className="field-input text-[12px] py-1"
+            >
+              <option value="">All levels</option>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+            <button onClick={() => void load()} className="btn-ghost text-[12px]">
+              Refresh
+            </button>
+          </div>
         }
       />
 
@@ -97,11 +98,11 @@ export default function Logs() {
                   </div>
                 ) : (
                   rows.map((e, i) => {
-                    const level = (e.level ?? "info").toLowerCase();
+                    const lvl = (e.level ?? "info").toLowerCase();
                     const status = e.status ?? 0;
-                    const duration = e.duration_ms ?? e.duration ?? 0;
-                    const at = e.created_at
-                      ? new Date(e.created_at).toISOString().replace("T", " ").slice(0, 19)
+                    const duration = e.durationMs ?? 0;
+                    const at = e.createdAt
+                      ? new Date(e.createdAt).toISOString().replace("T", " ").slice(0, 19)
                       : "";
                     return (
                       <div
@@ -110,18 +111,20 @@ export default function Logs() {
                       >
                         <span
                           className={
-                            level === "error"
+                            lvl === "error"
                               ? "text-err"
-                              : level === "warn"
+                              : lvl === "warn"
                                 ? "text-warn"
                                 : "text-ok"
                           }
                         >
-                          ● {level}
+                          ● {lvl}
                         </span>
                         <span className="text-ink">{e.method ?? ""}</span>
                         <span className="text-ink-muted truncate">{e.path ?? ""}</span>
-                        <span className={status >= 400 ? "text-err" : "text-ink"}>{status || ""}</span>
+                        <span className={status >= 400 ? "text-err" : "text-ink"}>
+                          {status || ""}
+                        </span>
                         <span className="text-ink-faint">{duration}</span>
                         <span className="text-ink-faint">{at}</span>
                       </div>
@@ -129,6 +132,30 @@ export default function Logs() {
                   })
                 )}
               </div>
+            </div>
+          )}
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-end gap-2 mt-3 text-[12px] text-ink-muted">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Previous page"
+              >
+                ‹
+              </button>
+              <span className="font-mono">
+                {page} / {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Next page"
+              >
+                ›
+              </button>
             </div>
           )}
         </section>

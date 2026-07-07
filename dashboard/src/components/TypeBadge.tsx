@@ -1,4 +1,4 @@
-import type { CollectionType } from "@/lib/mockData";
+import type { CollectionType } from "@/lib/types";
 import { collectionTypeMeta, collectionTypeTag } from "@/lib/collectionTypes";
 
 export default function TypeBadge({

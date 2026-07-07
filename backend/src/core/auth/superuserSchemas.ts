@@ -43,6 +43,22 @@ export const updateRoleSchema = z.object({
   role: z.enum(["admin", "editor", "viewer"]),
 });
 
+/**
+ * Per-user UI preferences. Currently only `pinnedCollections`, but the
+ * shape is intentionally extensible — future prefs (theme, density,
+ * saved filters) can be added without a migration or schema change.
+ *
+ * The PATCH endpoint does a shallow merge, so callers may send any
+ * subset of keys.
+ */
+export const prefsPatchSchema = z.object({
+  pinnedCollections: z.array(z.string().min(1).max(64)).max(100).optional(),
+});
+
+export interface SuperuserPrefs {
+  pinnedCollections?: string[];
+}
+
 // ─────────────────────────────────────────────────────────────
 //  Helper: coerce a raw DB role string into a valid SuperuserRole.
 //  Defends against unexpected values; unknown values fall back to "viewer"

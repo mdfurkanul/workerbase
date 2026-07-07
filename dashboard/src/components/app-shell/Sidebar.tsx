@@ -10,12 +10,12 @@ import {
   Search,
   Shield,
 } from "lucide-react";
-import { APP_VERSION } from "@/lib/mockData";
+import { APP_VERSION } from "@/lib/types";
 import { collectionTypeMeta } from "@/lib/collectionTypes";
 import { useAuth, isAdmin } from "@/hooks/useAuth";
 import { useCollections } from "@/hooks/useCollections";
+import { usePinnedCollections } from "@/hooks/usePinnedCollections";
 import { buildCollectionUrl } from "@/lib/collectionUrl";
-import { getPinnedCollections, togglePinned } from "@/lib/collectionStore";
 import CollectionOverview from "@/components/CollectionOverview";
 
 /* ─── Sidebar ──────────────────────────────────────────────────────── */
@@ -23,7 +23,7 @@ export function Sidebar() {
   const { collections, loading, error } = useCollections();
   const { user } = useAuth();
   const [query, setQuery] = useState("");
-  const [pinned, setPinned] = useState<string[]>(() => getPinnedCollections());
+  const { pinned, toggle: togglePin } = usePinnedCollections();
   const [systemOpen, setSystemOpen] = useState(true);
   const [overviewOpen, setOverviewOpen] = useState(false);
 
@@ -45,7 +45,7 @@ export function Sidebar() {
   const restList = userCollections.filter((c) => !pinnedSet.has(c.name));
 
   function handleTogglePin(name: string) {
-    setPinned(togglePinned(name));
+    void togglePin(name);
   }
 
   return (

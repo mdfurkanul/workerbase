@@ -78,8 +78,16 @@ export const createCollectionSchema = z.discriminatedUnion("type", [
 ]);
 
 /* ── Collection patch payloads (per type) ── */
+//
+// `name` is optional on every patch shape. When present and different
+// from the existing collection name, the PATCH handler runs
+// `ALTER TABLE old RENAME TO new` and updates `_collections.name`.
+// The handler refuses the rename when another collection references
+// the old name (via relation.targetCollection or a view query) — see
+// metadataRouter.ts.
 export const patchBaseSchema = z.object({
-  schema: z.array(fieldSchema).min(1),
+  name: z.string().min(1).max(64).regex(NAME_RE).optional(),
+  schema: z.array(fieldSchema).optional(),
   indexes: z.array(indexSchema).optional(),
   constraints: z.array(constraintSchema).optional(),
   listRule: z.string().optional(),
@@ -90,6 +98,7 @@ export const patchBaseSchema = z.object({
 });
 
 export const patchUserSchema = z.object({
+  name: z.string().min(1).max(64).regex(NAME_RE).optional(),
   schema: z.array(fieldSchema).optional(),
   indexes: z.array(indexSchema).optional(),
   constraints: z.array(constraintSchema).optional(),
@@ -103,6 +112,7 @@ export const patchUserSchema = z.object({
 });
 
 export const patchViewSchema = z.object({
+  name: z.string().min(1).max(64).regex(NAME_RE).optional(),
   query: z.string().min(1).max(8192),
   listRule: z.string().optional(),
   viewRule: z.string().optional(),

@@ -40,14 +40,32 @@ export function savePermissions<T>(name: string, value: T): void {
 }
 
 /* ─── Pinned collections ──────────────────────────────────────────── */
+//
+// Source of truth: `_superusers.prefs.pinnedCollections` on the backend.
+// localStorage is used only as a fast cache for instant first paint and
+// offline resilience. Writes from the dashboard go through the
+// `usePinnedCollections` hook, which calls the backend PATCH endpoint
+// and then mirrors the result here.
 export function getPinnedCollections(): string[] {
   return readJson<string[]>(PINNED_KEY, []);
+}
+
+/** Overwrite the local cache. Called by `usePinnedCollections` after a
+ *  backend sync or successful toggle. Mirrors the remote result. */
+export function setPinnedCollectionsLocal(names: string[]): void {
+  writeJson(PINNED_KEY, names);
 }
 
 export function isPinned(name: string): boolean {
   return getPinnedCollections().includes(name);
 }
 
+/**
+ * @deprecated Use `usePinnedCollections().toggle(name)` instead — this
+ *   sync helper only updates localStorage and will NOT propagate to the
+ *   backend. Kept for backward compatibility with any consumer that
+ *   hasn't migrated yet.
+ */
 export function togglePinned(name: string): string[] {
   const list = getPinnedCollections();
   const next = list.includes(name)

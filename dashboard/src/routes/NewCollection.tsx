@@ -5,7 +5,7 @@ import AppShell, { PageHeader } from "@/components/AppShell";
 import { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/components/AuthConfig";
 import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
 import { COLLECTION_TYPES, collectionTypeMeta } from "@/lib/collectionTypes";
-import type { CollectionType } from "@/lib/mockData";
+import type { CollectionType } from "@/lib/types";
 import { useCollections } from "@/hooks/useCollections";
 import type { IndexDef, ConstraintDef } from "@/components/fields";
 

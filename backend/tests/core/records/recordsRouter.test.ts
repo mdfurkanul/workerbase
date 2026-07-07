@@ -6,6 +6,12 @@ import {
   SYSTEM_COLUMNS,
   HIDDEN_READ_COLUMNS,
 } from "../../../src/core/records/recordsRouter.js";
+import {
+  pickDynamicDefaults,
+  DEFAULT_NOW,
+  DEFAULT_NOW_ON_UPDATE,
+  isDynamicDateDefault,
+} from "../../../src/core/collections/validation.js";
 import type { FieldDefinition } from "../../../src/db/schema.js";
 import type { PermissionScope } from "../../../src/db/schema.js";
 
@@ -172,5 +178,115 @@ describe("SYSTEM_COLUMNS + HIDDEN_READ_COLUMNS", () => {
   it("HIDDEN_READ_COLUMNS does not strip id or email from reads", () => {
     expect(HIDDEN_READ_COLUMNS.has("id")).toBe(false);
     expect(HIDDEN_READ_COLUMNS.has("email")).toBe(false);
+  });
+});
+
+describe("pickDynamicDefaults — date/datetime sentinel defaults", () => {
+  const dateFields: FieldDefinition[] = [
+    {
+      id: "f-created",
+      name: "created_on",
+      type: "datetime",
+      required: false,
+      unique: false,
+      hidden: false,
+      default: DEFAULT_NOW,
+      options: {},
+    },
+    {
+      id: "f-updated",
+      name: "updated_on",
+      type: "datetime",
+      required: false,
+      unique: false,
+      hidden: false,
+      default: DEFAULT_NOW_ON_UPDATE,
+      options: {},
+    },
+    {
+      id: "f-plain",
+      name: "title",
+      type: "text",
+      required: false,
+      unique: false,
+      hidden: false,
+      options: {},
+    },
+    {
+      id: "f-date",
+      name: "birthday",
+      type: "date",
+      required: false,
+      unique: false,
+      hidden: false,
+      default: DEFAULT_NOW,
+      options: {},
+    },
+  ];
+  const NOW = 1_700_000_000;
+
+  // 1. Happy path — INSERT fires both $now and $nowOnUpdate
+  it("on insert: fills both $now and $nowOnUpdate fields", () => {
+    const out = pickDynamicDefaults(dateFields, "insert", NOW);
+    expect(out).toEqual({
+      created_on: NOW,
+      updated_on: NOW,
+      birthday: NOW,
+    });
+  });
+
+  // 2. Happy path — UPDATE fires only $nowOnUpdate
+  it("on update: fills only $nowOnUpdate fields (not $now)", () => {
+    const out = pickDynamicDefaults(dateFields, "update", NOW);
+    expect(out).toEqual({ updated_on: NOW });
+  });
+
+  // 3. Validation failure — null schema returns empty
+  it("returns empty when schema is null", () => {
+    expect(pickDynamicDefaults(null, "insert", NOW)).toEqual({});
+    expect(pickDynamicDefaults(null, "update", NOW)).toEqual({});
+  });
+
+  // 4. Edge case — non-date fields with sentinel default are ignored
+  //    (defence in depth: the UI never offers these for non-date types,
+  //    but if one leaks through it must not become a dynamic timestamp)
+  it("ignores sentinel defaults on non-date field types", () => {
+    const weird: FieldDefinition[] = [
+      {
+        id: "w",
+        name: "title",
+        type: "text",
+        required: false,
+        unique: false,
+        hidden: false,
+        default: DEFAULT_NOW,
+        options: {},
+      },
+    ];
+    expect(pickDynamicDefaults(weird, "insert", NOW)).toEqual({});
+  });
+
+  // 5. Conflict / no-op — fields without dynamic defaults produce nothing
+  it("produces nothing for plain fields with no default", () => {
+    const out = pickDynamicDefaults(
+      [{ ...dateFields[2]!, default: undefined }],
+      "insert",
+      NOW,
+    );
+    expect(out).toEqual({});
+  });
+});
+
+describe("isDynamicDateDefault", () => {
+  it("recognises $now", () => {
+    expect(isDynamicDateDefault(DEFAULT_NOW)).toBe(true);
+  });
+  it("recognises $nowOnUpdate", () => {
+    expect(isDynamicDateDefault(DEFAULT_NOW_ON_UPDATE)).toBe(true);
+  });
+  it("rejects plain string defaults", () => {
+    expect(isDynamicDateDefault("2024-01-01")).toBe(false);
+    expect(isDynamicDateDefault(undefined)).toBe(false);
+    expect(isDynamicDateDefault("")).toBe(false);
   });
 });

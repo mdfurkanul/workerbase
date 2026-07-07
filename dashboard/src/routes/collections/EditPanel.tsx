@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import SchemaEditor, { type SchemaData, type Field as SchemaField } from "@/components/SchemaEditor";
 import AuthConfig, { DEFAULT_AUTH_SETTINGS, type AuthSettings } from "@/components/AuthConfig";
 import EmailTemplatesEditor, { DEFAULT_TEMPLATES, type EmailTemplates } from "@/components/EmailTemplates";
-import { type Collection } from "@/lib/mockData";
+import { type Collection } from "@/lib/types";
 import { apiClient, ApiError } from "@/lib/api-client";
 
 /* ─── SlideOver panel: edit collection (name + full schema editor) ── */
@@ -91,55 +91,149 @@ export function EditPanel({
   const [viewQuery, setViewQuery] = useState<string>(collection.query ?? "");
   const [viewSaving, setViewSaving] = useState(false);
   const [viewError, setViewError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [migrationInfo, setMigrationInfo] = useState<string | null>(null);
   const schemaData = useRef<SchemaData>({
     fields: buildEditFields(collection),
     indexes: [],
     constraints: [],
   });
 
+  /** Build the PATCH payload shape from the current draft state. Mirrors
+   *  the shape produced by NewCollection.tsx so the backend's patchBase/
+   *  patchUser schemas accept it. */
+  function buildPayload(): Record<string, unknown> {
+    const payload: Record<string, unknown> = {};
+
+    // Include rename only when the name actually changed.
+    if (name.trim() && name !== collection.name) {
+      payload.name = name.trim();
+    }
+
+    const fields = schemaData.current.fields
+      .filter((f) => f.name && !f.authField)
+      .flatMap((f) => {
+        if (f.type === "geo") {
+          const base = {
+            required: f.required,
+            unique: false,
+            hidden: f.hidden,
+            options: f.options ?? {},
+          };
+          return [
+            { id: `${f.cid}_latitude`, name: `${f.name}_latitude`, type: "real", ...base },
+            { id: `${f.cid}_longitude`, name: `${f.name}_longitude`, type: "real", ...base },
+          ];
+        }
+        return [{
+          id: f.cid,
+          name: f.name,
+          type: f.type,
+          required: f.required,
+          unique: f.unique,
+          hidden: f.hidden,
+          options: f.options ?? {},
+          ...(f.defaultValue ? { default: f.defaultValue } : {}),
+        }];
+      });
+
+    payload.schema = fields;
+    payload.indexes = schemaData.current.indexes.map((i) => ({
+      name: i.name,
+      columns: i.columns,
+      unique: i.unique,
+    }));
+    payload.constraints = schemaData.current.constraints.map((c) => ({
+      columns: c.columns,
+    }));
+
+    if (collection.type === "user") {
+      payload.authConfig = authSettings;
+      payload.emailTemplates = emailTemplates;
+    }
+
+    return payload;
+  }
+
+  function formatError(err: unknown, fallback: string): string {
+    if (err instanceof ApiError) {
+      const detail = err.detail;
+      if (typeof detail === "string") return detail;
+      const obj = detail as { message?: string; error?: string; issues?: { fieldErrors?: Record<string, string[]> } } | null;
+      if (obj?.message) return obj.message;
+      if (obj?.error) return obj.error;
+      // Zod flatten: surface the first field error.
+      const fe = obj?.issues?.fieldErrors;
+      if (fe) {
+        const first = Object.values(fe).flat()[0];
+        if (first) return first;
+      }
+      return err.message;
+    }
+    return err instanceof Error ? err.message : fallback;
+  }
+
   async function handleSave(): Promise<boolean | void> {
-    // For view collections, persist the SQL query via PATCH.
+    setSaveError(null);
+    setMigrationInfo(null);
+
+    // ── View collections: only the SQL query is editable ──
     if (collection.type === "view") {
       const trimmed = viewQuery.trim();
       if (!trimmed) {
         setViewError("View query cannot be empty.");
         return false;
       }
-      // No-op if the query hasn't changed.
-      if (trimmed === (collection.query ?? "").trim()) {
+      if (trimmed === (collection.query ?? "").trim() && !name.trim()) {
         onSaved();
         return true;
       }
       setViewSaving(true);
       setViewError(null);
       try {
+        const body: Record<string, unknown> = { query: trimmed };
+        if (name.trim() && name !== collection.name) body.name = name.trim();
         await apiClient.patch(
           `/api/core/collections/${encodeURIComponent(collection.name)}`,
-          { query: trimmed },
+          body,
         );
         onSaved();
         return true;
       } catch (err) {
-        const msg =
-          err instanceof ApiError
-            ? (typeof err.detail === "string"
-                ? err.detail
-                : (err.detail as { message?: string; error?: string } | null)?.message
-                  ?? (err.detail as { error?: string } | null)?.error
-                  ?? err.message)
-            : err instanceof Error
-              ? err.message
-              : "Failed to save view query";
-        setViewError(msg);
+        setViewError(formatError(err, "Failed to save view"));
         return false;
       } finally {
         setViewSaving(false);
       }
     }
-    // NOTE: schema/name edits for base/user collections are not yet persisted
-    // (no PATCH coverage for column add/drop). The schema editor remains in
-    // the UI as a draft view; onSaved() just closes the panel.
-    onSaved();
+
+    // ── base / user collections ──
+    setSaving(true);
+    try {
+      const payload = buildPayload();
+      const res = await apiClient.patch<{
+        migrations?: { applied: number; errors: string[] };
+        renamedFrom?: string;
+        name?: string;
+      }>(`/api/core/collections/${encodeURIComponent(collection.name)}`, payload);
+
+      const parts: string[] = [];
+      const applied = res.migrations?.applied ?? 0;
+      const errs = res.migrations?.errors ?? [];
+      if (applied > 0) parts.push(`${applied} migration(s) applied`);
+      if (errs.length > 0) parts.push(`${errs.length} error(s): ${errs.join("; ")}`);
+      if (res.renamedFrom) parts.push(`renamed from ${res.renamedFrom}`);
+      setMigrationInfo(parts.join(" · ") || "Saved");
+
+      onSaved();
+      return true;
+    } catch (err) {
+      setSaveError(formatError(err, "Failed to save collection"));
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }
 
   registerSave(handleSave);
@@ -151,12 +245,35 @@ export function EditPanel({
         <span className="label-mono">Collection name</span>
         <input
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            setSaveError(null);
+          }}
           pattern="[a-zA-Z][a-zA-Z0-9_]*"
           className="field-input font-mono"
           placeholder="collection_name"
         />
+        {name !== collection.name && (
+          <p className="text-[11px] text-warn font-mono">
+            Renaming updates the table name. Other collections that reference
+            this one (relation fields or view queries) must be updated first —
+            the backend refuses the rename otherwise.
+          </p>
+        )}
       </section>
+
+      {/* Status banners for the base/user save flow */}
+      {collection.type !== "view" && (saveError || migrationInfo || saving) && (
+        <div
+          className={`text-[12px] font-mono px-3 py-2 rounded border ${
+            saveError
+              ? "bg-err-bg text-err border-line-strong"
+              : "bg-surface-2 text-ink-muted border-line"
+          }`}
+        >
+          {saveError ?? (saving ? "Saving…" : migrationInfo)}
+        </div>
+      )}
 
       {/* View query editor (view collections only) */}
       {collection.type === "view" && (

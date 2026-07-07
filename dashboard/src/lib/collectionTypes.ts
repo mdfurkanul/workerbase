@@ -1,5 +1,5 @@
 import { Database, Eye, ShieldCheck, type LucideIcon } from "lucide-react";
-import type { CollectionType } from "@/lib/mockData";
+import type { CollectionType } from "@/lib/types";
 
 export interface CollectionTypeMeta {
   /** Storage value (matches backend `CollectionType`). */

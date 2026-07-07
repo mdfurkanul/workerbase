@@ -13,7 +13,7 @@ import type { Env } from "../../env.js";
 import type { FieldDefinition, CollectionType } from "../../db/schema.js";
 import { requireAuth, requireRole } from "../../auth/middleware.js";
 import { hashPassword } from "../../auth/crypto.js";
-import { validateRecordFields, parseD1FieldError } from "./validation.js";
+import { validateRecordFields, parseD1FieldError, pickDynamicDefaults } from "./validation.js";
 import { NAME_RE } from "./ddl.js";
 
 export const recordsRouter = new Hono<{ Bindings: Env }>();
@@ -132,7 +132,10 @@ recordsRouter.post("/:name/records", requireAuth, requireRole("admin", "editor")
 
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-  const data: Record<string, unknown> = { ...cleaned, id, created_at: now, updated_at: now };
+  // Auto-fill dynamic date defaults ($now / $nowOnUpdate) for any field
+  // the client omitted. Client-supplied values win — they explicitly set it.
+  const dynamicDefaults = pickDynamicDefaults(schemaFields, "insert", now);
+  const data: Record<string, unknown> = { ...dynamicDefaults, ...cleaned, id, created_at: now, updated_at: now };
 
   const cols = Object.keys(data);
   if (cols.length === 0) {
@@ -224,7 +227,12 @@ recordsRouter.patch("/:name/records/:id", requireAuth, requireRole("admin", "edi
     return c.json({ error: "validation_failed", fieldErrors }, 400);
   }
 
-  cleaned["updated_at"] = Math.floor(Date.now() / 1000);
+  // Refresh any $nowOnUpdate date fields (auto-timestamp on every write).
+  // $now fields are NOT touched here — they only fire on insert.
+  const updateNow = Math.floor(Date.now() / 1000);
+  const dynamicRefresh = pickDynamicDefaults(schemaFields, "update", updateNow);
+  for (const [k, v] of Object.entries(dynamicRefresh)) cleaned[k] = v;
+  cleaned["updated_at"] = updateNow;
 
   const sets = Object.keys(cleaned).map((k) => `"${k}" = ?`);
   const values = Object.values(cleaned);

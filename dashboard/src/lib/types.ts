@@ -1,10 +1,9 @@
 /**
  * Shared TypeScript types for the dashboard UI.
  *
- * Mock data arrays have been removed — the dashboard now loads every list
- * from the real API (`/api/core/...`). This module remains as the canonical
- * home for the lightweight `Collection` / `Record` shapes consumed by
- * route and component code.
+ * The dashboard loads every list from the real API (`/api/core/...`),
+ * so this module only holds the lightweight `Collection` / `Record`
+ * shapes consumed by route and component code, plus `APP_VERSION`.
  */
 
 export type CollectionType = "base" | "user" | "view";
