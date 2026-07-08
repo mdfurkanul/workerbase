@@ -241,7 +241,7 @@ function makeIntl(
  * @param input  epoch-ms, epoch-seconds, ISO string, or any raw DB value
  *               (typed `unknown` so display callers don't have to narrow
  *               arbitrary record values before passing through)
- * @param prefs  per-user prefs from /me/prefs
+ * @param prefs  system-wide prefs from /api/core/settings
  * @returns      formatted string (raw input on any failure)
  */
 export function formatDateTime(

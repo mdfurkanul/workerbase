@@ -273,6 +273,8 @@ export const logs = sqliteTable("_logs", {
   ip: text("ip"),
   userAgent: text("user_agent"),
   error: text("error"),
+  /** Who triggered the request — superuser email, "<collection>/<recordId>", or "anonymous". */
+  requestBy: text("request_by"),
   createdAt: integer("created_at").notNull(),
 });
 

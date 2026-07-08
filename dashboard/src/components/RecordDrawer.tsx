@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Loader2, Trash2, X, Check, Pencil } from "lucide-react";
-import { apiClient, ApiError } from "@/lib/api-client";
+import { Loader2, Trash2, X, Check, Pencil, Download } from "lucide-react";
+import { apiClient, ApiError, getToken } from "@/lib/api-client";
 import { useAuth, canEdit } from "@/hooks/useAuth";
 import { usePrefs } from "@/hooks/usePrefs";
 import {
@@ -146,6 +146,40 @@ export default function RecordDrawer({
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Download a backup JSON file. Only shown for the `_backups` system
+   * table. Uses the raw `fetch` API (not `apiClient`) because the
+   * response is a binary blob, not JSON — `apiClient` parses JSON
+   * responses only.
+   */
+  async function handleDownloadBackup() {
+    const id = record?.id;
+    if (!id || typeof id !== "string") return;
+    setSaving(true);
+    try {
+      const token = getToken();
+      const base = import.meta.env.VITE_API_BASE_URL ?? "";
+      const res = await fetch(
+        `${base}/api/core/backups/${encodeURIComponent(id)}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = id;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed");
     } finally {
       setSaving(false);
     }
@@ -376,6 +410,16 @@ export default function RecordDrawer({
               </>
             ) : (
               <>
+                {collectionName === "_backups" && record?.id && (
+                  <button
+                    onClick={handleDownloadBackup}
+                    disabled={saving}
+                    className="btn-ghost text-[12px]"
+                    title="Download backup JSON"
+                  >
+                    {saving ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Download
+                  </button>
+                )}
                 {allowEdit && (
                   <button
                     onClick={() => setEditMode(true)}

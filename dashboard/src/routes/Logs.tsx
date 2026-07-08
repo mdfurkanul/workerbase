@@ -85,12 +85,13 @@ export default function Logs() {
             </div>
           ) : (
             <div className="bg-surface border border-line rounded font-mono text-[12px] overflow-hidden">
-              <div className="grid grid-cols-[80px_70px_1fr_70px_70px_180px] px-4 py-2 hairline-b bg-surface-2 label-mono">
+              <div className="grid grid-cols-[80px_70px_1fr_70px_70px_160px_180px] px-4 py-2 hairline-b bg-surface-2 label-mono">
                 <span>Level</span>
                 <span>Method</span>
                 <span>Path</span>
                 <span>Status</span>
                 <span>Ms</span>
+                <span>Request by</span>
                 <span>At</span>
               </div>
               <div className="max-h-[60vh] overflow-y-auto">
@@ -104,10 +105,12 @@ export default function Logs() {
                     const status = e.status ?? 0;
                     const duration = e.durationMs ?? 0;
                     const at = e.createdAt ? formatDateTime(e.createdAt) : "";
+                    const by = e.requestBy ?? "anonymous";
+                    const isAnon = by === "anonymous";
                     return (
                       <div
                         key={e.id ?? i}
-                        className="grid grid-cols-[80px_70px_1fr_70px_70px_180px] px-4 py-2 hairline-b last:border-b-0 hover:bg-surface-2"
+                        className="grid grid-cols-[80px_70px_1fr_70px_70px_160px_180px] px-4 py-2 hairline-b last:border-b-0 hover:bg-surface-2"
                       >
                         <span
                           className={
@@ -126,6 +129,14 @@ export default function Logs() {
                           {status || ""}
                         </span>
                         <span className="text-ink-faint">{duration}</span>
+                        <span
+                          className={
+                            isAnon ? "text-ink-faint italic" : "text-ink-muted truncate"
+                          }
+                          title={by}
+                        >
+                          {by}
+                        </span>
                         <span className="text-ink-faint">{at}</span>
                       </div>
                     );

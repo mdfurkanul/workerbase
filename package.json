@@ -11,30 +11,25 @@
     "dev": "concurrently -n backend,dashboard -c blue,magenta \"npm:dev:backend\" \"npm:dev:dashboard\"",
     "dev:backend": "npm run dev --workspace backend",
     "dev:dashboard": "npm run dev --workspace dashboard",
-
     "build": "npm run build:dashboard && npm run build:backend",
     "build:backend": "npm run build --workspace backend",
     "build:dashboard": "npm run build --workspace dashboard",
-
     "typecheck": "npm run typecheck --workspaces --if-present",
-
     "test": "npm run test --workspace backend",
     "test:watch": "npm run test:watch --workspace backend",
-
     "deploy:preprod": "npm run build:dashboard && npm run deploy:preprod --workspace backend",
     "deploy:prod": "npm run build:dashboard && npm run deploy:prod --workspace backend",
     "deploy": "npm run deploy:prod",
-
     "migrate:local": "npm run migrate:local --workspace backend",
     "migrate:preprod": "npm run migrate:preprod --workspace backend",
     "migrate:prod": "npm run migrate:prod --workspace backend",
-
     "docs": "node scripts/serve-docs.mjs",
     "docs:open": "node scripts/serve-docs.mjs --open"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "wrangler": "^4.107.1"
   },
   "engines": {
     "node": ">=20"

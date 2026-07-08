@@ -50,7 +50,7 @@ logsRouter.get("/", requireAuth, async (c) => {
 
     const { results } = await db
       .prepare(
-        `SELECT id, level, method, path, status, duration_ms, ip, user_agent, error, created_at
+        `SELECT id, level, method, path, status, duration_ms, ip, user_agent, error, request_by, created_at
            FROM _logs ${where}
           ORDER BY created_at DESC, rowid DESC
           LIMIT ? OFFSET ?`,
@@ -71,6 +71,7 @@ logsRouter.get("/", requireAuth, async (c) => {
           ip: row.ip ?? null,
           userAgent: row.user_agent ?? null,
           error: row.error ?? null,
+          requestBy: row.request_by ?? "anonymous",
           createdAt: row.created_at,
         };
       }),
@@ -128,19 +129,25 @@ export async function recordRequest(
     path: string;
     status: number;
     durationMs: number;
+    /** Epoch-ms captured at request start by the middleware. Using the
+     *  caller-provided value (rather than Date.now() inside waitUntil)
+     *  ensures the row's timestamp reflects when the request hit the
+     *  server, not when the background write happened to fire. */
+    startedAt: number;
+    /** Who triggered the request — superuser email, "<collection>/<recordId>", or "anonymous". */
+    requestBy: string;
     ip: string | null;
     userAgent: string | null;
     error: string | null;
   },
 ): Promise<void> {
-  const now = Date.now();
   const id = crypto.randomUUID();
   const db = env.SYSTEM_DB;
   try {
     await db
       .prepare(
-        `INSERT INTO _logs (id, level, method, path, status, duration_ms, ip, user_agent, error, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO _logs (id, level, method, path, status, duration_ms, ip, user_agent, error, request_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id,
@@ -152,7 +159,8 @@ export async function recordRequest(
         entry.ip,
         entry.userAgent,
         entry.error,
-        now,
+        entry.requestBy,
+        entry.startedAt,
       )
       .run();
 

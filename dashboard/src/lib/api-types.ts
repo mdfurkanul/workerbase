@@ -230,6 +230,8 @@ export interface LogEntry {
   ip?: string | null;
   userAgent?: string | null;
   error?: string | null;
+  /** Who triggered the request — superuser email, "<collection>/<recordId>", or "anonymous". */
+  requestBy?: string | null;
   createdAt: number;
 }
 

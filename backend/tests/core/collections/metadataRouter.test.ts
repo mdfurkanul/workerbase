@@ -1,90 +1,77 @@
 import { describe, it, expect } from "vitest";
-import { mergeSystemColumns } from "../../../src/core/collections/metadataRouter.js";
-import { SYSTEM_COLUMNS } from "../../../src/core/collections/ddl.js";
-
-type Col = { name: string; type: string };
+import { normalizeType } from "../../../src/core/collections/metadataRouter.js";
 
 /**
- * mergeSystemColumns — prepends id / created_at / updated_at to a returned
- * collection schema so the dashboard sees the full physical table shape.
- *
- * System columns are auto-managed by DDL and intentionally filtered OUT of
- * the stored `_collections.schema` JSON. They must be re-merged at read time.
+ * normalizeType — maps a raw SQLite column type + column name to a
+ * WorkerBase display type. SQLite stores datetimes as INTEGER (epoch),
+ * so the column NAME is the signal that distinguishes a timestamp from
+ * a plain counter.
  */
-describe("mergeSystemColumns", () => {
-  // 1. Happy path — empty schema returns just the system columns
-  it("returns the system columns when the input schema is empty", () => {
-    const out = mergeSystemColumns<Col>([]);
-    expect(out.map((f) => f.name)).toEqual(
-      SYSTEM_COLUMNS.map((c) => c.name),
-    );
+describe("normalizeType", () => {
+  // 1. Happy path — *_at INTEGER columns are recognised as datetime
+  it("maps INTEGER columns ending in _at to 'datetime'", () => {
+    expect(normalizeType("created_at", "INTEGER")).toBe("datetime");
+    expect(normalizeType("updated_at", "INTEGER")).toBe("datetime");
+    expect(normalizeType("expires_at", "INTEGER")).toBe("datetime");
+    expect(normalizeType("applied_at", "INTEGER")).toBe("datetime");
   });
 
-  // 2. Happy path — user fields come back with system columns prepended
-  it("prepends system columns to user-defined fields", () => {
-    const out = mergeSystemColumns([
-      { name: "title", type: "text" },
-      { name: "views", type: "integer" },
-    ]);
-    expect(out.map((f) => f.name)).toEqual([
-      "id",
-      "created_at",
-      "updated_at",
-      "title",
-      "views",
-    ]);
+  // 2. Happy path — plain INTEGER columns stay as 'integer'
+  it("maps non-timestamp INTEGER columns to 'integer'", () => {
+    expect(normalizeType("duration_ms", "INTEGER")).toBe("integer");
+    expect(normalizeType("status", "INTEGER")).toBe("integer");
+    expect(normalizeType("count", "INTEGER")).toBe("integer");
+    expect(normalizeType("price", "INTEGER")).toBe("integer");
   });
 
-  // 3. Conflict — dedupes when a user-defined column already shares a system name
-  //    (e.g. an "id" field from a legacy import) — system shape wins, no duplicate.
-  it("does not duplicate a user-defined 'id' column", () => {
-    const out = mergeSystemColumns([
-      { name: "id", type: "text" },
-      { name: "body", type: "text" },
-    ]);
-    const ids = out.filter((f) => f.name === "id");
-    expect(ids).toHaveLength(1);
-    expect(out.map((f) => f.name)).toEqual([
-      "id",
-      "created_at",
-      "updated_at",
-      "body",
-    ]);
+  // 3. Happy path — TEXT maps to 'text'
+  it("maps TEXT to 'text'", () => {
+    expect(normalizeType("email", "TEXT")).toBe("text");
+    expect(normalizeType("path", "TEXT")).toBe("text");
+    expect(normalizeType("key", "TEXT")).toBe("text");
   });
 
-  // 4. Edge case — preserves all extra metadata on user-defined fields
-  //    ( FieldDefinition has many keys beyond { name, type } )
-  it("preserves extra metadata on user-defined fields", () => {
-    const out = mergeSystemColumns([
-      {
-        name: "email",
-        type: "text",
-        required: true,
-        unique: true,
-        hidden: false,
-        options: { maxLength: 120 },
-      },
-    ]);
-    expect(out[out.length - 1]).toMatchObject({
-      name: "email",
-      required: true,
-      unique: true,
-      options: { maxLength: 120 },
-    });
+  // 4. Happy path — REAL/float types
+  it("maps REAL and float to 'real'", () => {
+    expect(normalizeType("latitude", "REAL")).toBe("real");
+    expect(normalizeType("score", "FLOAT")).toBe("real");
+    expect(normalizeType("ratio", "DOUBLE")).toBe("real");
   });
 
-  // 5. Conflict — when a user-defined column has a DIFFERENT type than the
-  //    system column, the system shape wins (their version is replaced).
-  //    This guarantees the dashboard renders id/created_at/updated_at with
-  //    the canonical types the backend manages them as.
-  it("overwrites a conflicting user-defined system column with the canonical type", () => {
-    const out = mergeSystemColumns([
-      { name: "id", type: "integer" }, // wrong type — system says text
-      { name: "created_at", type: "text" }, // wrong type — system says datetime
-    ]);
-    const id = out.find((f) => f.name === "id");
-    const createdAt = out.find((f) => f.name === "created_at");
-    expect(id?.type).toBe("text");
-    expect(createdAt?.type).toBe("datetime");
+  // 5. Edge case — column named 'created' or 'timestamp' is datetime
+  it("recognises 'created' and 'timestamp' as datetime when INTEGER", () => {
+    expect(normalizeType("created", "INTEGER")).toBe("datetime");
+    expect(normalizeType("timestamp", "INTEGER")).toBe("datetime");
+  });
+
+  // 6. Edge case — explicitly declared DATETIME/TIMESTAMP type
+  it("maps explicitly declared DATETIME/TIMESTAMP types", () => {
+    expect(normalizeType("some_col", "DATETIME")).toBe("datetime");
+    expect(normalizeType("some_col", "TIMESTAMP")).toBe("datetime");
+    expect(normalizeType("some_col", "DATE")).toBe("date");
+  });
+
+  // 7. Edge case — BOOLEAN/BOOL
+  it("maps BOOLEAN/BOOL to 'bool'", () => {
+    expect(normalizeType("active", "BOOLEAN")).toBe("bool");
+    expect(normalizeType("verified", "BOOL")).toBe("bool");
+  });
+
+  // 8. Edge case — empty/null type falls back to 'text'
+  it("falls back to 'text' for empty or null types", () => {
+    expect(normalizeType("unknown", "")).toBe("text");
+    expect(normalizeType("unknown", "")).toBe("text");
+  });
+
+  // 9. Edge case — BLOB
+  it("maps BLOB to 'blob'", () => {
+    expect(normalizeType("data", "BLOB")).toBe("blob");
+  });
+
+  // 10. Edge case — *_at column name with non-INTEGER type is NOT
+  //     treated as datetime (name detection only applies to INTEGER,
+  //     which is how SQLite stores epoch timestamps).
+  it("does not treat *_at TEXT columns as datetime", () => {
+    expect(normalizeType("metadata_at", "TEXT")).toBe("text");
   });
 });

@@ -63,12 +63,13 @@ export function isPinned(name: string): boolean {
 
 /* ─── Timezone + date/time format prefs (local cache) ────────────── */
 //
-// Source of truth: `_superusers.prefs.{timezone, dateTimeFormat,
-// customDateTimePattern}` on the backend. localStorage is used only as a
-// fast cache so the first paint shows the user's chosen zone/format
-// instead of flashing UTC + ISO 8601 while the network round-trip runs.
-// Writes go through `usePrefs().patch`, which calls the backend and then
-// mirrors the server-confirmed result here.
+// Source of truth: the `_settings` table
+// (`/api/core/settings` → `{ timezone, dateTimeFormat,
+// customDateTimePattern }`). localStorage is used only as a fast cache
+// so the first paint shows the configured zone/format instead of
+// flashing UTC + ISO 8601 while the network round-trip runs. Writes go
+// through `usePrefs().patch`, which PATCHes `/api/core/settings` and
+// then mirrors the server-confirmed result here.
 export interface TimezonePrefsCache {
   timezone?: string;
   dateTimeFormat?: string;

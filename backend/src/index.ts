@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { serveStatic } from "hono/cloudflare-workers";
 import type { Env } from "./env.js";
 import {
@@ -36,16 +36,42 @@ app.use("*", async (c, next) => {
 });
 
 // ── Request logging ───────────────────────────────────────────────
-// One row per API request, written via waitUntil so the response is
-// never blocked. Trim+persist logic lives in `recordRequest`.
+// Only requests against USER-CREATED collections are logged to `_logs`.
+// System/admin routes (/api/core/superusers, /api/core/settings,
+// /api/core/backups, /api/core/sql, the collections-metadata CRUD itself,
+// etc.) and internal underscore-prefixed tables (_settings, _superusers…)
+// are intentionally skipped to keep the log focused on actual data access.
+//
+// Concretely, a row is written when the path matches one of:
+//   /api/core/collections/<name>/records/*   (admin records API)
+//   /api/collections/<name>/records/*        (public records API)
+//   /api/collections/<name>/auth/*           (collection auth API)
+// where <name> does NOT start with `_` (so internal tables are excluded).
+//
+// Trim+persist logic lives in `recordRequest`; the write runs via
+// `waitUntil` so the response is never blocked.
 app.use("/api/*", async (c, next) => {
-  const start = Date.now();
+  // performance.now() gives sub-ms monotonic timing — Date.now() in the
+  // Workers runtime is deliberately coarsened to ~5ms to mitigate
+  // Spectre-class timing attacks, so every duration measured with it
+  // comes out suspiciously round (0, 5, 10, 15…).
+  const startPerf = performance.now();
+  // Capture the absolute timestamp at request START — not later inside
+  // the waitUntil callback, which fires after the response is already
+  // out the door and can lag by several milliseconds.
+  const startedAt = Date.now();
   await next();
-  // Skip static asset paths — only API traffic is interesting.
   const path = new URL(c.req.url).pathname;
-  if (!path.startsWith("/api/")) return;
+  if (!shouldLogPath(path)) return;
   const status = c.res.status ?? 200;
-  const durationMs = Date.now() - start;
+  const durationMs = Math.round((performance.now() - startPerf) * 1000) / 1000;
+
+  // Identify who triggered the request. Auth middleware (requireAuth,
+  // optionalAuth, requireCollectionAuth) runs during `await next()` and
+  // sets context variables. We read them here — after next() returns —
+  // so the identity is available regardless of which router handled it.
+  const requestBy = resolveRequestBy(c);
+
   c.executionCtx.waitUntil(
     recordRequest(c.env, {
       level: levelFromStatus(status),
@@ -53,12 +79,82 @@ app.use("/api/*", async (c, next) => {
       path,
       status,
       durationMs,
+      startedAt,
+      requestBy,
       ip: c.req.header("CF-Connecting-IP") ?? c.req.header("X-Forwarded-For") ?? null,
       userAgent: c.req.header("User-Agent") ?? null,
       error: null,
     }),
   );
 });
+
+/**
+ * Resolve the identity of the caller for logging purposes.
+ *
+ * Checks the Hono context variables set by auth middleware:
+ *   - Superuser JWT → `c.get("user")` (TokenPayload with email)
+ *   - Collection-auth JWT → `c.get("authRecord")` (CollectionTokenPayload)
+ *
+ * Falls back to "anonymous" for public routes, unauthenticated requests,
+ * or invalid/expired tokens (where no middleware set a variable).
+ */
+function resolveRequestBy(c: Context): string {
+  // Superuser — set by requireAuth / optionalAuth.
+  try {
+    const user = c.get("user" as never) as
+      | { email?: string; sub?: string }
+      | undefined;
+    if (user?.email) return user.email;
+  } catch {
+    /* not set */
+  }
+
+  // Collection-auth user — set by requireCollectionAuth.
+  try {
+    const authRecord = c.get("authRecord" as never) as
+      | { collection?: string; recordId?: string }
+      | undefined;
+    if (authRecord?.collection && authRecord?.recordId) {
+      return `${authRecord.collection}/${authRecord.recordId}`;
+    }
+  } catch {
+    /* not set */
+  }
+
+  return "anonymous";
+}
+
+/**
+ * Decide whether a request path should be logged to `_logs`.
+ *
+ * Returns true only for data-access routes on a user-created collection
+ * (records CRUD on the admin or public API, and collection-auth flows).
+ * Underscore-prefixed names (`_settings`, `_superusers`, …) are treated
+ * as internal and excluded.
+ */
+function shouldLogPath(path: string): boolean {
+  // Fast reject: must be under /api/.
+  if (!path.startsWith("/api/")) return false;
+
+  // Admin records API: /api/core/collections/<name>/records[/*]
+  const admin = path.match(/^\/api\/core\/collections\/([^/]+)\/records(?:\/|$)/);
+  if (admin) {
+    return !isAdminNamespace(admin[1]!);
+  }
+
+  // Public client API: /api/collections/<name>/records[/*] or /auth[/*]
+  const pub = path.match(/^\/api\/collections\/([^/]+)\/(?:records|auth)(?:\/|$)/);
+  if (pub) {
+    return !isAdminNamespace(pub[1]!);
+  }
+
+  return false;
+}
+
+/** Underscore-prefixed names are internal system tables, not user collections. */
+function isAdminNamespace(name: string): boolean {
+  return name.startsWith("_");
+}
 
 /**
  * All system APIs live under /api/core/*.

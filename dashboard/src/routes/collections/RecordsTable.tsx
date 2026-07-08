@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Search, Loader2 } from "lucide-react";
+import { Plus, Search, Loader2, Download } from "lucide-react";
 import { DataTable, Cell } from "@/components/Table";
 import ColumnPicker from "@/components/ColumnPicker";
 import RecordDrawer from "@/components/RecordDrawer";
@@ -8,7 +8,7 @@ import SelectionBar from "@/components/SelectionBar";
 import Modal from "@/components/Modal";
 import { useAuth, canEdit } from "@/hooks/useAuth";
 import { type Record as Row, type Collection } from "@/lib/types";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, getToken } from "@/lib/api-client";
 import { collectionAllowsRecordEdits } from "./helpers";
 
 /* ─── Records sub-view ─────────────────────────────────────────────── */
@@ -100,6 +100,37 @@ export function RecordsTable({
   const pageRows = records;
 
   const visibleSet = new Set(visible);
+  const isBackupsTable = collectionName === "_backups";
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  async function handleDownloadBackup(row: Row) {
+    const id = row.id;
+    if (!id || typeof id !== "string") return;
+    setDownloadingId(id);
+    try {
+      const token = getToken();
+      const base = import.meta.env.VITE_API_BASE_URL ?? "";
+      const res = await fetch(
+        `${base}/api/core/backups/${encodeURIComponent(id)}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = id;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch {
+      // Silently fail — the drawer has a richer error display.
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
   const columns = allColumns
     .filter((f) => visibleSet.has(f.name))
     .map((f) => ({
@@ -112,6 +143,37 @@ export function RecordsTable({
           <Cell value={r[f.name]} fieldType={f.type} />
         ),
     }));
+
+  // Append a download action column for the _backups system table.
+  if (isBackupsTable) {
+    columns.push({
+      key: "__actions",
+      header: "Actions",
+      cell: (r: Row) => {
+        const id = r.id;
+        if (!id || typeof id !== "string") return <></>;
+        const busy = downloadingId === id;
+        return (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDownloadBackup(r);
+            }}
+            disabled={busy}
+            className="btn-ghost text-[11px] py-0.5 px-2"
+            title="Download backup JSON"
+          >
+            {busy ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Download size={11} />
+            )}
+            <span className="ml-1">Download</span>
+          </button>
+        );
+      },
+    });
+  }
 
   // ─── Selection handlers ───────────────────────────────────────────
   function toggleRow(id: string) {

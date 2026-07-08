@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { usePrefs } from "@/hooks/usePrefs";
-import { looksLikeEpochSeconds } from "@/lib/dateTimeFormat";
 
 interface Column<T> {
   key: string;
@@ -175,20 +174,10 @@ export function Cell({
     );
   }
 
-  // Bare numeric epoch (created_at/updated_at columns) — best-effort format.
-  if (
-    typeof value === "number" &&
-    (looksLikeEpochSeconds(value) || value > 1e12)
-  ) {
-    const formatted = formatDateTime(value);
-    if (formatted && formatted !== String(value)) {
-      return (
-        <span className="font-mono text-ink-muted whitespace-nowrap" title={String(value)}>
-          {formatted}
-        </span>
-      );
-    }
-  }
-
+  // NOTE: we deliberately do NOT auto-detect timestamps from bare numbers.
+  // A previous heuristic treated any number < 1e12 as epoch-seconds, which
+  // misfired on durations, counts, prices, etc. — a 6ms duration would
+  // render as "1 January 1970". Only fields explicitly typed as `datetime`
+  // (handled above) get formatted through the TZ-aware formatter.
   return <span className="text-ink">{String(value)}</span>;
 }

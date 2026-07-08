@@ -19,7 +19,6 @@ import {
   AUTH_RESERVED_COLUMNS,
   HIDDEN,
   NAME_RE,
-  SYSTEM_COLUMNS,
   assertIdentifier,
   isSafeSelectQuery,
   renderCreateTable,
@@ -36,22 +35,120 @@ import {
 export const metadataRouter = new Hono<{ Bindings: Env }>();
 
 /**
- * Prepend the standard system-managed columns (id, created_at, updated_at)
- * to a returned schema. The system columns are always auto-managed by DDL
- * — they exist on every base/user table even when absent from the stored
- * `_collections.schema` JSON. If a user-defined field happens to share a
- * system name (e.g. legacy "id" column), the system shape wins because
- * that's what the physical table actually contains — the user's version
- * was filtered out at create time by `isReserved()`.
+ * Map a raw SQLite declared type + column name to a WorkerBase display
+ * type. SQLite stores datetimes as `INTEGER` (epoch ms/s), so PRAGMA
+ * alone can't distinguish a timestamp from a plain counter — the column
+ * name is the signal (`created_at`, `updated_at`, `expires_at`, etc.).
+ *
+ * This is type NORMALISATION, not column forcing: the column must
+ * physically exist in PRAGMA output to appear at all. We're only
+ * providing a better type label for the dashboard's renderer.
  */
-export function mergeSystemColumns<T extends { name: string; type: string }>(
-  schema: T[],
-): T[] {
-  const sysNames: Set<string> = new Set(SYSTEM_COLUMNS.map((c) => c.name));
-  const userFields = schema.filter((f) => !sysNames.has(f.name));
-  // The SYSTEM_COLUMNS constant is `{ name, type }` only — cast back to T
-  // since the dashboard treats schema entries as opaque column descriptors.
-  return [...SYSTEM_COLUMNS, ...userFields] as unknown as T[];
+export function normalizeType(columnName: string, sqliteType: string): string {
+  const raw = (sqliteType || "text").toLowerCase();
+
+  // Column-name-driven datetime detection. Matches the naming convention
+  // used across every system table and every auto-managed column.
+  if (
+    raw === "integer" &&
+    (/._at$/.test(columnName) ||
+      columnName === "created" ||
+      columnName === "timestamp" ||
+      columnName === "expires" ||
+      columnName === "lastRunAt" ||
+      columnName === "lastAutoAt")
+  ) {
+    return "datetime";
+  }
+
+  // Map raw SQLite types to WorkerBase display types.
+  switch (raw) {
+    case "integer":
+    case "int":
+      return "integer";
+    case "real":
+    case "float":
+    case "double":
+      return "real";
+    case "blob":
+      return "blob";
+    case "datetime":
+    case "timestamp":
+      return "datetime";
+    case "date":
+      return "date";
+    case "boolean":
+    case "bool":
+      return "bool";
+    default:
+      return raw || "text";
+  }
+}
+
+/**
+ * Fetch the ACTUAL columns of a table or view directly from the database
+ * via `PRAGMA table_info`. This is the single source of truth for which
+ * columns physically exist — no hardcoded or forced columns, ever.
+ *
+ * Returns `{ name, type }` pairs where `type` is normalised to a
+ * WorkerBase display type via `normalizeType()`. Callers may further
+ * refine types using the stored `_collections.schema` JSON via
+ * `resolveLiveSchema()`.
+ */
+async function fetchPragmaColumns(
+  db: D1Database,
+  name: string,
+): Promise<{ name: string; type: string }[]> {
+  // Guard against anything that isn't a safe identifier — PRAGMA doesn't
+  // accept parameterised table names, so we inline after asserting shape.
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) return [];
+  try {
+    const { results } = await db
+      .prepare(`PRAGMA table_info("${name}")`)
+      .all();
+    return (results ?? [])
+      .filter((r) => typeof (r as { name?: unknown }).name === "string")
+      .map((r) => {
+        const row = r as { name: string; type?: string };
+        return { name: row.name, type: normalizeType(row.name, row.type ?? "") };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build the display schema for a collection.
+ *
+ * Column names + count ALWAYS come from `PRAGMA table_info` — the actual
+ * database structure. No hardcoded `id`/`created_at`/`updated_at` are
+ * injected; whatever columns the table physically has is what the
+ * dashboard sees.
+ *
+ * If a stored schema exists (from `_collections.schema`), its richer
+ * WorkerBase field type (e.g. `"datetime"`, `"editor"`) is mapped onto
+ * matching PRAGMA columns to improve display rendering. Columns that
+ * exist in the DB but aren't in the stored schema keep their raw SQLite
+ * type. Columns in the stored schema that don't exist in the DB are
+ * dropped (stale metadata).
+ */
+async function resolveLiveSchema(
+  db: D1Database,
+  name: string,
+  stored: FieldDefinition[] | null,
+): Promise<{ name: string; type: string }[]> {
+  const pragmaCols = await fetchPragmaColumns(db, name);
+  if (pragmaCols.length === 0) return [];
+
+  // No stored schema — return raw PRAGMA types.
+  if (!stored || stored.length === 0) return pragmaCols;
+
+  // Map stored field types onto matching columns for richer display.
+  const storedByName = new Map(stored.map((f) => [f.name, f]));
+  return pragmaCols.map((col) => {
+    const match = storedByName.get(col.name);
+    return match ? { name: col.name, type: match.type } : col;
+  });
 }
 
 /** Escape a literal string for safe embedding inside a RegExp constructor. */
@@ -307,26 +404,8 @@ metadataRouter.get("/", requireAuth, async (c) => {
   );
 
   // Helper: fetch live column list for a table via PRAGMA.
-  // Names come straight from sqlite_master so they're safe to inline,
-  // but we still assert they match a strict identifier shape.
-  const fetchSchema = async (
-    db: D1Database,
-    name: string,
-  ): Promise<{ name: string; type: string }[]> => {
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) return [];
-    try {
-      const { results } = await db.prepare(`PRAGMA table_info("${name}")`).all();
-      return (results ?? [])
-        .filter((r) => typeof (r as { name?: unknown }).name === "string")
-        .map((r) => {
-          const row = r as { name: string; type?: string };
-          return { name: row.name, type: (row.type || "text").toLowerCase() };
-        });
-    } catch {
-      return [];
-    }
-  };
-
+  // Delegates to the module-level resolveLiveSchema so column display
+  // is always driven by the actual database structure.
   const buildEntries = async (
     names: string[],
     source: "system" | "data",
@@ -334,20 +413,12 @@ metadataRouter.get("/", requireAuth, async (c) => {
     Promise.all(
       names.map(async (name) => {
         const db = c.env.SYSTEM_DB;
-        const pragmaSchema = await fetchSchema(db, name);
         const meta = metaByName.get(name);
-        // Prefer the stored schema (richer — has FieldDefinition metadata
-        // like required/unique/hidden) when present, otherwise fall back
-        // to the PRAGMA-derived shape.
-        const baseSchema = meta?.schema ?? pragmaSchema;
-        // System columns (id, created_at, updated_at) are auto-managed by DDL
-        // and intentionally excluded from the stored schema. Re-merge them in
-        // so the dashboard sees the full table shape (views don't have them).
-        const isViewCollection = (meta?.type ?? "") === "view";
-        const schema = isViewCollection
-          ? baseSchema
-          : mergeSystemColumns(baseSchema);
         const declaredType = meta?.type ?? (source === "system" ? "system" : "base");
+        // Column list + types come from PRAGMA (actual DB structure).
+        // Stored schema refines types where it matches — see
+        // resolveLiveSchema for details.
+        const schema = await resolveLiveSchema(db, name, meta?.schema ?? null);
         return {
           id: `${source}__${name}`,
           name,
@@ -396,32 +467,16 @@ metadataRouter.get("/:name", requireAuth, async (c) => {
       ? "system"
       : "base";
 
-  // Prefer stored schema; fall back to PRAGMA-derived columns.
-  let schema: { name: string; type: string }[] = [];
+  // Column list + types come from PRAGMA (the actual database structure).
+  // Stored schema refines the type for matching columns where available.
+  // No hardcoded or forced columns — what the DB reports is what's shown.
+  let storedSchema: FieldDefinition[] | null = null;
   if (meta?.schema) {
     try {
-      schema = (JSON.parse(meta.schema) as FieldDefinition[]).map((f) => ({
-        name: f.name,
-        type: f.type,
-      }));
-    } catch { /* fall through to PRAGMA */ }
+      storedSchema = JSON.parse(meta.schema) as FieldDefinition[];
+    } catch { /* treat as null */ }
   }
-  if (schema.length === 0 && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-    try {
-      const { results } = await db.prepare(`PRAGMA table_info("${name}")`).all();
-      schema = (results ?? [])
-        .filter((r) => typeof (r as { name?: unknown }).name === "string")
-        .map((r) => {
-          const row = r as { name: string; type?: string };
-          return { name: row.name, type: (row.type || "text").toLowerCase() };
-        });
-    } catch { /* leave schema empty */ }
-  }
-  // Re-merge the auto-managed system columns (id, created_at, updated_at)
-  // for base/user tables. Views don't have them.
-  if (declaredType !== "view") {
-    schema = mergeSystemColumns(schema);
-  }
+  const schema = await resolveLiveSchema(db, name, storedSchema);
 
   return c.json({
     collection: {
