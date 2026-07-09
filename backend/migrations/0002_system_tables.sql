@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS "_superusers" (
   "password_salt" TEXT NOT NULL,
   "token_key"     TEXT NOT NULL DEFAULT '',
   "verified"      INTEGER NOT NULL DEFAULT 0,
+  "role"          TEXT NOT NULL DEFAULT 'admin',
+  "prefs"         TEXT,
   "created_at"    INTEGER NOT NULL,
   "updated_at"    INTEGER NOT NULL
 );
@@ -33,18 +35,6 @@ CREATE INDEX IF NOT EXISTS "_externalAuths_provider_idx"
   ON "_externalAuths" ("provider", "provider_id");
 CREATE INDEX IF NOT EXISTS "_externalAuths_user_idx"
   ON "_externalAuths" ("collection_ref", "record_ref");
-
--- ─── _collections — extend the existing table with new columns ──────
--- (ALTER TABLE is safe on D1; columns are nullable so old rows survive.)
-ALTER TABLE "_collections" ADD COLUMN "indexes"        TEXT;     -- JSON: IndexDefinition[]
-ALTER TABLE "_collections" ADD COLUMN "constraints"    TEXT;     -- JSON: ConstraintDefinition[]
-ALTER TABLE "_collections" ADD COLUMN "view_rule"      TEXT;     -- PermissionScope
-ALTER TABLE "_collections" ADD COLUMN "update_rule"    TEXT;     -- PermissionScope
-ALTER TABLE "_collections" ADD COLUMN "delete_rule"    TEXT;     -- PermissionScope
-ALTER TABLE "_collections" ADD COLUMN "auth_config"    TEXT;     -- JSON: AuthConfig
-ALTER TABLE "_collections" ADD COLUMN "email_templates" TEXT;    -- JSON: EmailTemplates
-ALTER TABLE "_collections" ADD COLUMN "created_at" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "_collections" ADD COLUMN "updated_at" INTEGER NOT NULL DEFAULT 0;
 
 -- ─── _settings — global application settings (key-value) ────────────
 CREATE TABLE IF NOT EXISTS "_settings" (
@@ -89,6 +79,7 @@ CREATE TABLE IF NOT EXISTS "_logs" (
   "ip"           TEXT,
   "user_agent"   TEXT,
   "error"        TEXT,
+  "request_by"   TEXT,
   "created_at"   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS "_logs_created_idx" ON "_logs" ("created_at");

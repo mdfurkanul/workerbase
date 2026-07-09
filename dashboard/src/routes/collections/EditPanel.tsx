@@ -21,17 +21,22 @@ import { apiClient, ApiError } from "@/lib/api-client";
  * `key={collection.id}` remount strategy keeps things fresh on switch.
  */
 export function buildEditFields(collection: Collection): SchemaField[] {
-  const baseFields: SchemaField[] = collection.schema.map((f, i) => ({
-    cid: `existing_${i}`,
+  const baseFields: SchemaField[] = collection.schema.map((f) => ({
+    // CRITICAL: use the backend's stable `id` as the React key + PATCH
+    // payload id. Positional ids (e.g. `existing_${i}`) desync from the
+    // stored schema on any reorder/add/remove and cause diffSchema() to
+    // see every field as drop+add — which drops every column. Fall back
+    // to a name-derived id only when the backend didn't supply one.
+    cid: f.id ?? `col_${f.name}`,
     name: f.name,
     type: (f.type as SchemaField["type"]) ?? "text",
-    required: false,
-    unique: false,
-    hidden: false,
-    options: {},
-    locked: ["id", "created", "updated", "created_at"].includes(f.name),
-    primaryKey: f.name === "id",
-    auto: f.name === "created" || f.name === "updated",
+    required: f.required ?? false,
+    unique: f.unique ?? false,
+    hidden: f.hidden ?? false,
+    options: (f.options as SchemaField["options"]) ?? {},
+    locked: !!f.system || ["id", "created", "updated", "created_at"].includes(f.name),
+    primaryKey: !!f.primaryKey || f.name === "id",
+    auto: !!f.auto || f.name === "created" || f.name === "updated",
   }));
 
   if (collection.type !== "user") return baseFields;

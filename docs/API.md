@@ -24,7 +24,9 @@ Base URL (prod):  your Cloudflare Worker URL
 11. [Export](#9-export)
 12. [Import](#10-import)
 13. [Backups](#11-backups)
-14. [Maintenance Notes](#maintenance-notes)
+14. [Settings](#13-settings)
+15. [API Tokens](#14-api-tokens)
+16. [Maintenance Notes](#maintenance-notes)
 
 ---
 
@@ -36,8 +38,19 @@ Two JWT flavors, both signed with the same `AUTH_SECRET` (≥ 32 chars):
 |-----------------|---------------------|------------------------------------------|----------------------|
 | Superuser JWT   | `/api/core/*`       | `{ sub, email, role }`                   | `Authorization: Bearer <token>` |
 | Collection JWT  | `/api/collections/:name/auth/*` and rule-gated records | `{ collection, recordId, email, verified }` | `Authorization: Bearer <token>` |
+| API Token (PAT) | `/api/collections/*` (records API only) | Opaque `wbs_…` string; SHA-256 hashed in `_apiTokens`. Per-token `scopes` (`read` \| `write` \| `admin`) + optional `collectionScope` | `Authorization: Bearer wbs_…` |
 
 Superuser roles hierarchy: `admin` > `editor` > `viewer`.
+
+API tokens bypass per-collection `apiRules` (they are admin-issued) but are gated by the token's scope against the HTTP method:
+
+| HTTP method on `/api/collections/*` | Minimum scope |
+|---|---|
+| `GET` (list, view) | `read` |
+| `POST`, `PATCH` | `write` |
+| `DELETE` | `admin` |
+
+Scope hierarchy: `admin` ⊇ `write` ⊇ `read`.
 
 Rule system for public records API (`apiRules` per collection):
 
@@ -337,6 +350,10 @@ File: `backend/src/core/records/recordsRouter.ts`
 
 All endpoints below are governed by the corresponding `apiRules` entry on the
 collection. Anonymous → 401, insufficient rule → 403, no rule → 403.
+
+A valid API token (`Authorization: Bearer wbs_…`) **bypasses** `apiRules` and is
+instead gated only by the token's scope (see [Authentication Model](#authentication-model)).
+Revoked or expired tokens fall through to the anonymous path.
 
 ### `GET /api/collections/:name/records`
 - **Auth:** `listRule`
@@ -701,6 +718,79 @@ System-wide key/value store backed by the `_settings` table (one row per key, JS
 
 ---
 
+## 14. API Tokens
+
+File: `backend/src/core/apiTokens/apiTokensRouter.ts`
+
+Personal Access Tokens (PATs) for programmatic access to the public records API
+(`/api/collections/*`). All endpoints require an **admin** superuser JWT. Tokens
+are opaque `wbs_…` strings; only the SHA-256 hash is stored, so the raw value is
+returned exactly **once** at creation time.
+
+### `GET /api/core/api-tokens`
+- **Auth:** Superuser JWT — **admin only**
+- **Response 200:** `{ tokens: ApiTokenMeta[] }` (sorted by `created_at` DESC; never includes `token_hash` or the raw token)
+
+### `GET /api/core/api-tokens/:id`
+- **Auth:** Superuser JWT — **admin only**
+- **Path:** `id` (UUID)
+- **Response 200:** `{ token: ApiTokenMeta }` · 404 if not found
+
+### `POST /api/core/api-tokens`
+- **Auth:** Superuser JWT — **admin only**
+- **Body:**
+
+| Field            | Type                                | Required | Validation                                            |
+|------------------|-------------------------------------|----------|-------------------------------------------------------|
+| `name`           | string                              | yes      | 1–80 chars                                            |
+| `scopes`         | `"read" \| "write" \| "admin"`      | yes      | enum                                                  |
+| `collectionScope`| string                              | no       | 1–64 chars; must match an existing collection name   |
+| `expiresInDays`  | number                              | no       | integer 1–3650                                        |
+
+- **Response 201:** `{ token: "wbs_…", tokenMeta: ApiTokenMeta }` — the raw token is returned **only here**; persist it client-side, it cannot be recovered.
+- **Errors:** 400 `validation_failed` · 400 `unknown_collection` (bad `collectionScope`) · 403 non-admin role · 401 missing token
+
+### `PATCH /api/core/api-tokens/:id`
+- **Auth:** Superuser JWT — **admin only**
+- **Body:** any subset of `{ name?, scopes?, collectionScope? }` (same validation as POST)
+- **Response 200:** `{ token: ApiTokenMeta }`
+- **Errors:** 400 `validation_failed` · 400 `unknown_collection` · 404 `not_found`
+
+### `DELETE /api/core/api-tokens/:id`
+- **Auth:** Superuser JWT — **admin only**
+- **Query:** `permanent=1` to hard-delete the row; otherwise a soft-revoke (`revoked_at` set).
+- **Response 200:** `{ success: true, revoked: true }` (soft) or `{ success: true, permanent: true }` (hard)
+- **Errors:** 404 `not_found`. Idempotent — re-revoking an already-revoked token succeeds.
+
+### `ApiTokenMeta` shape
+
+| Field             | Type                | Notes                                         |
+|-------------------|---------------------|-----------------------------------------------|
+| `id`              | string (UUID)       |                                               |
+| `name`            | string              | user-supplied label                           |
+| `prefix`          | string              | first 10 chars of the random portion (UI hint)|
+| `scopes`          | `"read" \| "write" \| "admin"` |                                       |
+| `collection_scope`| string \| null      | NULL = all collections                        |
+| `created_by`      | string              | superuser id                                  |
+| `created_at`      | integer (ms)        |                                               |
+| `last_used_at`    | integer \| null     | updated on each records-API call using token  |
+| `expires_at`      | integer \| null     | NULL = never expires                          |
+| `revoked_at`      | integer \| null     | set on soft-revoke; NULL = active             |
+
+### Using an API token
+
+```bash
+curl -X POST https://<worker>/api/collections/posts/records \
+  -H "Authorization: Bearer wbs_<your-token>" \
+  -H "Content-Type: application/json" \
+  --data-raw '{"title":"Hello"}'
+```
+
+The records API recognises the `wbs_` prefix and short-circuits the normal
+JWT/rule evaluation, applying only the scope + `collectionScope` checks.
+
+---
+
 > **When adding, removing, or modifying ANY endpoint, update this file in the same commit.**
 
 Sections to keep in sync:
@@ -717,6 +807,7 @@ Source-of-truth router files (under `backend/src/`):
 - `core/auth/externalAuthRouter.ts`
 - `core/collections/collectionsRouter.ts`
 - `core/records/recordsRouter.ts`
+- `core/apiTokens/apiTokensRouter.ts`
 - `core/sql/sqlQueriesRouter.ts`
 - `core/storage/storageRouter.ts`
 - `core/realtime/realtimeRouter.ts`

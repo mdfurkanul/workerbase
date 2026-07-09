@@ -8,9 +8,21 @@
 
 export type CollectionType = "base" | "user" | "view";
 
+/** Mirrors the backend FieldDefinition — the stable `id` is what the
+ *  migration diff uses to track a field across renames/edits, so it MUST
+ *  be preserved end-to-end or PATCH will treat edits as drop+add. */
 export interface CollectionField {
+  id: string;
   name: string;
   type: string;
+  required?: boolean;
+  unique?: boolean;
+  hidden?: boolean;
+  system?: boolean;
+  auto?: boolean;
+  primaryKey?: boolean;
+  default?: string;
+  options?: { [k: string]: unknown };
 }
 
 export interface Collection {

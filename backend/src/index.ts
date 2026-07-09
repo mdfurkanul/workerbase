@@ -15,6 +15,7 @@ import {
   importRouter,
   backupsRouter,
   logsRouter,
+  apiTokensRouter,
   recordRequest,
   levelFromStatus,
 } from "./core/index.js";
@@ -169,6 +170,7 @@ function isAdminNamespace(name: string): boolean {
  *   /api/core/export/*        — bulk data export (admin)
  *   /api/core/import/*        — bulk data import (admin)
  *   /api/core/backups/*       — DB snapshot backup + time-travel restore (admin)
+ *   /api/core/api-tokens/*    — personal access tokens for the records API (admin)
  */
 const core = new Hono<{ Bindings: Env }>();
 core.route("/superusers", superuserAuthRouter);
@@ -182,6 +184,7 @@ core.route("/export", exportRouter);
 core.route("/import", importRouter);
 core.route("/backups", backupsRouter);
 core.route("/logs", logsRouter);
+core.route("/api-tokens", apiTokensRouter);
 
 app.route("/api/core", core);
 

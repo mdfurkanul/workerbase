@@ -5,16 +5,22 @@ import { useAuth, canEdit } from "@/hooks/useAuth";
 import { usePrefs } from "@/hooks/usePrefs";
 import {
   epochMsToWallClock,
-  wallClockToEpochMs,
   looksLikeEpochSeconds,
 } from "@/lib/dateTimeFormat";
+import { objectUrl, isImageKey } from "@/lib/api-storage";
+import { coerceForPayload } from "@/components/record-fields/coerce";
+import { asString } from "@/components/record-fields/types";
+import { RecordField } from "@/components/record-fields/RecordField";
+import { GeoField, validateGeo } from "@/components/record-fields/GeoField";
+import { groupFieldsForForm } from "@/components/record-fields/grouping";
+import type { CollectionField } from "@/lib/types";
 import Modal from "@/components/Modal";
 
 interface Props {
   open: boolean;
   collectionName: string;
   recordId: string | null;
-  schema?: { name: string; type: string }[];
+  schema?: CollectionField[];
   snapshot?: { key: string; value: unknown }[];
   /** When true, hide Edit/Delete actions (e.g. read-only system tables). */
   readOnly?: boolean;
@@ -51,6 +57,32 @@ function valueToString(value: unknown, type: string | undefined, timezone: strin
     // Stored as TEXT yyyy-MM-dd — keep the user-typed form.
     return typeof value === "string" ? value.slice(0, 10) : String(value);
   }
+  if (type === "files") {
+    // Stored as a JSON array of keys (or already a JSON string).
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  if (type === "json") {
+    // Pretty-print the JSON for editability.
+    if (typeof value === "string") {
+      // Try to re-format; if it's not parseable, leave as-is.
+      try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  // editor / select / file / relation / text / numbers / etc. — string as-is.
   return String(value);
 }
 
@@ -190,32 +222,28 @@ export default function RecordDrawer({
     if (!allowEdit) return; // defense in depth — viewer cannot save edits
     setError(null);
 
-    // Validate each field by type.
-    const errs: Record<string, string> = {};
-    for (const [k, v] of Object.entries(editValues)) {
-      const raw = (v ?? "").trim();
-      if (raw === "") continue;
-      const fieldDef = schema.find((f) => f.name === k);
-      switch (fieldDef?.type) {
-        case "integer":
-          if (!/^-?\d+$/.test(raw)) errs[k] = `${k} must be a whole number`;
-          break;
-        case "real":
-          if (isNaN(Number(raw))) errs[k] = `${k} must be a valid number`;
-          break;
-        case "email":
-          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) errs[k] = `${k} must be a valid email`;
-          break;
-        case "url":
-          if (!/^https?:\/\/.+/.test(raw)) errs[k] = `${k} must be a valid URL (http:// or https://)`;
-          break;
-        case "bool":
-          if (!["true", "false", "1", "0"].includes(raw.toLowerCase())) errs[k] = `${k} must be true or false`;
-          break;
-      }
+    // Surface any errors that the RecordField components have reported.
+    const activeErrs = Object.entries(editErrors)
+      .filter(([, msg]) => !!msg)
+      .reduce<Record<string, string>>((acc, [k, msg]) => {
+        acc[k] = msg!;
+        return acc;
+      }, {});
+
+    // Geo pair validation (lat/lon bounds).
+    for (const slot of editSlots) {
+      if (slot.kind !== "geo") continue;
+      const latKey = `${slot.base}_latitude`;
+      const lonKey = `${slot.base}_longitude`;
+      const lat = (editValues[latKey] ?? "").trim();
+      const lon = (editValues[lonKey] ?? "").trim();
+      const g = validateGeo(lat, lon);
+      if (g.lat) activeErrs[latKey] = g.lat;
+      if (g.lon) activeErrs[lonKey] = g.lon;
     }
-    if (Object.keys(errs).length > 0) {
-      setEditErrors(errs);
+
+    if (Object.keys(activeErrs).length > 0) {
+      setEditErrors(activeErrs);
       return;
     }
     setEditErrors({});
@@ -225,23 +253,16 @@ export default function RecordDrawer({
       const payload: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(editValues)) {
         const fieldDef = schema.find((f) => f.name === k);
+        const type = fieldDef?.type ?? "text";
         const raw = (v ?? "").trim();
-        if (fieldDef?.type === "integer") payload[k] = parseInt(raw, 10);
-        else if (fieldDef?.type === "real") payload[k] = parseFloat(raw);
-        else if (fieldDef?.type === "bool") payload[k] = raw === "true";
-        else if (fieldDef?.type === "datetime") {
-          // User typed a wall-clock value in their TZ; convert to epoch ms.
-          // Empty string is preserved as-is so the user can clear the field.
-          if (raw === "") payload[k] = "";
-          else {
-            const ms = wallClockToEpochMs(raw, timezone);
-            payload[k] = ms ?? raw; // fall back to raw string if unparseable
-          }
+        // Preserve empty string clears for datetime (existing behavior),
+        // skip empties for everything else.
+        if (raw === "" && type !== "datetime") continue;
+        if (raw === "") {
+          payload[k] = "";
+        } else {
+          payload[k] = coerceForPayload(type, raw, timezone);
         }
-        else if (fieldDef?.type === "date") {
-          payload[k] = raw.slice(0, 10); // normalise to yyyy-MM-dd
-        }
-        else payload[k] = v;
       }
       await apiClient.patch(
         `/api/core/collections/${encodeURIComponent(collectionName)}/records/${encodeURIComponent(recordId)}`,
@@ -276,9 +297,14 @@ export default function RecordDrawer({
   }
 
   // Compute editable fields from schema (or from record keys).
-  const editableKeys = schema.length
-    ? schema.filter((f) => !PROTECTED_COLS.has(f.name)).map((f) => f.name)
-    : record ? Object.keys(record).filter((k) => !PROTECTED_COLS.has(k)) : [];
+  const editableFields: CollectionField[] = schema.length
+    ? schema.filter((f) => !PROTECTED_COLS.has(f.name))
+    : record
+      ? Object.keys(record)
+          .filter((k) => !PROTECTED_COLS.has(k))
+          .map((k) => ({ id: k, name: k, type: "text" }))
+      : [];
+  const editSlots = groupFieldsForForm(editableFields);
 
   return (
     <>
@@ -327,65 +353,66 @@ export default function RecordDrawer({
             </div>
           ) : record ? (
             editMode ? (
-              /* ── Edit mode — inputs pre-filled with current values ── */
+              /* ── Edit mode — type-aware widgets pre-filled with current values ── */
               <div className="space-y-3">
-                {editableKeys.map((key) => {
-                  const fieldDef = schema.find((f) => f.name === key);
-                  const currentVal = record[key];
-                  const fieldErr = editErrors[key];
+                {editSlots.map((slot) => {
+                  if (slot.kind === "geo") {
+                    const latKey = `${slot.base}_latitude`;
+                    const lonKey = `${slot.base}_longitude`;
+                    const lat = editValues[latKey] ?? "";
+                    const lon = editValues[lonKey] ?? "";
+                    const gErr = validateGeo(lat, lon);
+                    return (
+                      <GeoField
+                        key={`geo-${slot.base}`}
+                        label={slot.base}
+                        required={slot.latField.required || slot.lonField.required}
+                        lat={lat}
+                        lon={lon}
+                        onLatChange={(v) => {
+                          setEditValues((ev) => ({ ...ev, [latKey]: v }));
+                          setEditErrors((ee) => ({ ...ee, [latKey]: gErr.lat ?? "" }));
+                        }}
+                        onLonChange={(v) => {
+                          setEditValues((ev) => ({ ...ev, [lonKey]: v }));
+                          setEditErrors((ee) => ({ ...ee, [lonKey]: gErr.lon ?? "" }));
+                        }}
+                        errorLat={editErrors[latKey] || undefined}
+                        errorLon={editErrors[lonKey] || undefined}
+                      />
+                    );
+                  }
+                  const f = slot.field;
+                  const currentVal = record[f.name];
                   return (
-                    <label key={key} className="block">
-                      <span className="label-mono">
-                        {key}{" "}
-                        <span className="text-ink-faint normal-case font-normal">· {fieldDef?.type ?? "text"}</span>
-                      </span>
-                      {fieldDef?.type === "bool" ? (
-                        <select
-                          value={editValues[key] ?? ""}
-                          onChange={(e) => { setEditValues((ev) => ({ ...ev, [key]: e.target.value })); setEditErrors((ee) => ({ ...ee, [key]: "" })); }}
-                          className={`field-input mt-1 ${fieldErr ? "border-err" : ""}`}
-                        >
-                          <option value="">— unset —</option>
-                          <option value="true">true</option>
-                          <option value="false">false</option>
-                        </select>
-                      ) : (
-                        <input
-                          type={
-                            fieldDef?.type === "integer" || fieldDef?.type === "real"
-                              ? "number"
-                              : fieldDef?.type === "datetime"
-                                ? "datetime-local"
-                                : fieldDef?.type === "date"
-                                  ? "date"
-                                  : "text"
-                          }
-                          value={editValues[key] ?? ""}
-                          onChange={(e) => { setEditValues((ev) => ({ ...ev, [key]: e.target.value })); setEditErrors((ee) => ({ ...ee, [key]: "" })); }}
-                          placeholder={currentVal === null ? "null" : String(currentVal)}
-                          className={`field-input mt-1 ${fieldErr ? "border-err" : ""}`}
-                        />
-                      )}
-                      {fieldErr && <div className="text-err text-[12px] mt-1">{fieldErr}</div>}
-                    </label>
+                    <RecordField
+                      key={f.id ?? f.name}
+                      field={f}
+                      value={editValues[f.name] ?? ""}
+                      onChange={(v) => {
+                        setEditValues((ev) => ({
+                          ...ev,
+                          [f.name]: typeof v === "string" ? v : String(v),
+                        }));
+                        setEditErrors((ee) => ({ ...ee, [f.name]: "" }));
+                      }}
+                      onErrorChange={(err) => {
+                        setEditErrors((ee) => {
+                          const next = { ...ee };
+                          if (err) next[f.name] = err;
+                          else delete next[f.name];
+                          return next;
+                        });
+                      }}
+                      error={editErrors[f.name] || undefined}
+                      placeholderFromCurrent={currentVal}
+                    />
                   );
                 })}
               </div>
             ) : (
               /* ── Read mode ── */
-              <dl className="bg-surface border border-line rounded divide-y divide-line">
-                {Object.entries(record).map(([key, value]) => {
-                  const fieldDef = schema.find((f) => f.name === key);
-                  return (
-                    <div key={key} className="grid grid-cols-[140px_1fr] gap-3 px-3 py-2.5 items-start">
-                      <dt className="font-mono text-[12px] text-ink-muted pt-0.5">{key}</dt>
-                      <dd className="text-[13px] break-words">
-                        <DetailValue value={value} fieldType={fieldDef?.type} formatDateTime={formatDateTime} />
-                      </dd>
-                    </div>
-                  );
-                })}
-              </dl>
+              <ReadModeList record={record} schema={schema} formatDateTime={formatDateTime} />
             )
           ) : (
             <div className="text-center text-ink-muted text-[13px] py-10">
@@ -485,18 +512,92 @@ export default function RecordDrawer({
   );
 }
 
+/**
+ * Read-mode record list. Walks record entries in stored order, grouping
+ * `<base>_latitude` + `<base>_longitude` pairs into a single "geo" row
+ * (lat, lon) instead of two separate lines.
+ */
+function ReadModeList({
+  record,
+  schema,
+  formatDateTime,
+}: {
+  record: Record<string, unknown>;
+  schema: CollectionField[];
+  formatDateTime: (input: unknown) => string;
+}) {
+  const entries = Object.entries(record);
+  const rows: { key: string; label: string; value: unknown; type?: string; options?: { [k: string]: unknown } }[] = [];
+
+  const used = new Set<number>();
+  for (let i = 0; i < entries.length; i++) {
+    if (used.has(i)) continue;
+    const [key, value] = entries[i]!;
+    const m = /^(.+)_latitude$/.exec(key);
+    if (m && i + 1 < entries.length) {
+      const base = m[1]!;
+      const [nextKey, nextVal] = entries[i + 1]!;
+      if (nextKey === `${base}_longitude`) {
+        rows.push({
+          key: base,
+          label: base,
+          value: `${asString(value)}, ${asString(nextVal)}`,
+          type: "geo",
+        });
+        used.add(i);
+        used.add(i + 1);
+        continue;
+      }
+    }
+    const fieldDef = schema.find((f) => f.name === key);
+    rows.push({
+      key,
+      label: key,
+      value,
+      type: fieldDef?.type,
+      options: fieldDef?.options,
+    });
+  }
+
+  return (
+    <dl className="bg-surface border border-line rounded divide-y divide-line">
+      {rows.map((r) => (
+        <div key={r.key} className="grid grid-cols-[140px_1fr] gap-3 px-3 py-2.5 items-start">
+          <dt className="font-mono text-[12px] text-ink-muted pt-0.5">
+            {r.label}
+            {r.type && r.type !== "geo" && (
+              <span className="block text-[10px] text-ink-faint normal-case">{r.type}</span>
+            )}
+          </dt>
+          <dd className="text-[13px] break-words">
+            <DetailValue
+              value={r.value}
+              fieldType={r.type}
+              fieldOptions={r.options}
+              formatDateTime={formatDateTime}
+            />
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function DetailValue({
   value,
   fieldType,
+  fieldOptions,
   formatDateTime,
 }: {
   value: unknown;
   fieldType?: string;
+  fieldOptions?: { [k: string]: unknown };
   formatDateTime: (input: unknown) => string;
 }) {
   if (value === null || value === undefined || value === "") {
     return <span className="text-ink-faint">N/A</span>;
   }
+
   if (fieldType === "datetime") {
     const formatted = formatDateTime(value);
     if (formatted && formatted !== String(value)) {
@@ -508,13 +609,112 @@ function DetailValue({
     }
     return <span className="break-all">{String(value)}</span>;
   }
-  if (typeof value === "boolean") {
-    return value ? (
+
+  if (fieldType === "bool") {
+    const isTrue = value === true || value === 1 || value === "true" || value === "1";
+    return isTrue ? (
       <span className="badge badge-ok">true</span>
     ) : (
       <span className="badge badge-muted">false</span>
     );
   }
+
+  if (fieldType === "select") {
+    return <span className="badge badge-info">{String(value)}</span>;
+  }
+
+  if (fieldType === "editor") {
+    // TipTap emits a safe HTML subset on save. Render it directly.
+    return (
+      <div
+        className="prose-rte break-words"
+        dangerouslySetInnerHTML={{ __html: String(value) }}
+      />
+    );
+  }
+
+  if (fieldType === "json") {
+    let pretty = "";
+    try {
+      pretty = JSON.stringify(
+        typeof value === "string" ? JSON.parse(value) : value,
+        null,
+        2,
+      );
+    } catch {
+      pretty = String(value);
+    }
+    return <pre className="font-mono text-[12px] whitespace-pre-wrap break-words">{pretty}</pre>;
+  }
+
+  if (fieldType === "file") {
+    const key = String(value);
+    if (isImageKey(key)) {
+      return (
+        <a href={objectUrl(key)} target="_blank" rel="noreferrer" className="inline-block">
+          <img src={objectUrl(key)} alt={key} className="w-16 h-16 rounded object-cover border border-line" />
+        </a>
+      );
+    }
+    return (
+      <a
+        href={objectUrl(key)}
+        target="_blank"
+        rel="noreferrer"
+        className="font-mono text-[12px] text-brand hover:underline break-all"
+      >
+        {key}
+      </a>
+    );
+  }
+
+  if (fieldType === "files") {
+    let keys: string[] = [];
+    try {
+      const parsed = typeof value === "string" ? JSON.parse(value) : value;
+      keys = Array.isArray(parsed) ? parsed.filter((k) => typeof k === "string") : [];
+    } catch {
+      keys = [];
+    }
+    if (keys.length === 0) return <span className="text-ink-faint">N/A</span>;
+    return (
+      <div className="flex flex-col gap-1">
+        {keys.map((k, i) =>
+          isImageKey(k) ? (
+            <a key={`${k}-${i}`} href={objectUrl(k)} target="_blank" rel="noreferrer">
+              <img src={objectUrl(k)} alt={k} className="w-16 h-16 rounded object-cover border border-line" />
+            </a>
+          ) : (
+            <a
+              key={`${k}-${i}`}
+              href={objectUrl(k)}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-[12px] text-brand hover:underline break-all"
+            >
+              {k}
+            </a>
+          ),
+        )}
+      </div>
+    );
+  }
+
+  if (fieldType === "relation") {
+    const target =
+      typeof fieldOptions?.target === "string" ? fieldOptions.target : "?";
+    return (
+      <span className="font-mono text-[12px] text-ink">
+        {target}#{String(value)}
+      </span>
+    );
+  }
+
+  if (fieldType === "geo") {
+    return <span className="font-mono text-ink">{String(value)}</span>;
+  }
+
+  // Default rendering for everything else.
   if (typeof value === "number") {
     return <span className="font-mono text-ink">{value}</span>;
   }

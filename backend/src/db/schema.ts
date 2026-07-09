@@ -292,6 +292,39 @@ export const sqlQueries = sqliteTable("_sqlQueries", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+/* ─── _apiTokens — long-lived personal access tokens ──────────────── */
+
+/**
+ * API token scopes — a strict hierarchy.
+ *
+ *   read  → GET only (list + view)
+ *   write → read + POST + PATCH (no DELETE)
+ *   admin → all methods including DELETE
+ *
+ * Stored as plain text in `_apiTokens.scopes`.
+ */
+export type ApiTokenScope = "read" | "write" | "admin";
+
+export const apiTokens = sqliteTable("_apiTokens", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  /** SHA-256 hex of the raw `wbs_...` token. */
+  tokenHash: text("token_hash").notNull().unique(),
+  /** First 10 chars of the random portion (for UI display, e.g. `wbs_••••aBcD`). */
+  prefix: text("prefix").notNull(),
+  scopes: text("scopes").$type<ApiTokenScope>().notNull().default("read"),
+  /** Restrict the token to a single collection; NULL = all collections. */
+  collectionScope: text("collection_scope"),
+  /** Superuser id that minted the token. */
+  createdBy: text("created_by").notNull(),
+  createdAt: integer("created_at").notNull(),
+  lastUsedAt: integer("last_used_at"),
+  /** Epoch ms after which the token is invalid; NULL = never expires. */
+  expiresAt: integer("expires_at"),
+  /** Set when the token was revoked; NULL = active. */
+  revokedAt: integer("revoked_at"),
+});
+
 /* ═══════════════════════════════════════════════════════════════════
    Inferred row types
    ═══════════════════════════════════════════════════════════════════ */
@@ -319,3 +352,6 @@ export type NewLog = typeof logs.$inferInsert;
 
 export type SqlQuery = typeof sqlQueries.$inferSelect;
 export type NewSqlQuery = typeof sqlQueries.$inferInsert;
+
+export type ApiToken = typeof apiTokens.$inferSelect;
+export type NewApiToken = typeof apiTokens.$inferInsert;

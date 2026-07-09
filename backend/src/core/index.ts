@@ -17,3 +17,4 @@ export { exportRouter } from "./export/index.js";
 export { importRouter } from "./import/index.js";
 export { backupsRouter } from "./backups/index.js";
 export { logsRouter, recordRequest, levelFromStatus } from "./logs/index.js";
+export { apiTokensRouter } from "./apiTokens/index.js";

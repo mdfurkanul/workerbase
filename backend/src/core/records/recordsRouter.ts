@@ -23,12 +23,19 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import type { Env } from "../../env.js";
 import type {
+  ApiTokenScope,
   CollectionType,
   FieldDefinition,
   PermissionScope,
 } from "../../db/schema.js";
 import { verifyToken } from "../../auth/crypto.js";
 import { verifyCollectionToken } from "../../auth/collectionToken.js";
+import {
+  parseApiToken,
+  scopeForMethod,
+  scopeSatisfies,
+} from "../../auth/apiToken.js";
+import { resolveApiToken, touchApiToken } from "../apiTokens/index.js";
 import { pickDynamicDefaults } from "../collections/validation.js";
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
@@ -47,12 +54,18 @@ interface CollectionMeta {
 }
 
 interface Principal {
-  kind: "anonymous" | "collection-user" | "superuser";
+  kind: "anonymous" | "collection-user" | "superuser" | "api-token";
   /** For collection-user: collection name + record id from the JWT. */
   collection?: string;
   recordId?: string;
   /** For superuser: role from the dashboard JWT. */
   role?: string;
+  /** For api-token: the scope granted to this token (read/write/admin). */
+  apiTokenScope?: ApiTokenScope;
+  /** For api-token: the token row id (for last_used_at stamping). */
+  apiTokenId?: string;
+  /** For api-token: optional restriction to a single collection. */
+  apiTokenCollectionScope?: string | null;
 }
 
 async function loadCollection(db: D1Database, name: string): Promise<CollectionMeta | null> {
@@ -87,17 +100,48 @@ async function loadCollection(db: D1Database, name: string): Promise<CollectionM
   };
 }
 
-/** Resolve the request principal (anonymous / collection-user / superuser). */
+/**
+ * Resolve the request principal.
+ *
+ * Order of checks:
+ *   1. API token (`wbs_…`) → DB lookup → `api-token` principal
+ *   2. Collection JWT → `collection-user` principal
+ *   3. Dashboard superuser JWT → `superuser` principal
+ *   4. Otherwise → anonymous
+ *
+ * API tokens are checked first because their prefix makes them trivially
+ * distinguishable, and they short-circuit the rest of the auth stack.
+ */
 async function resolvePrincipal(
   c: Parameters<MiddlewareHandler<{ Bindings: Env }>>[0],
   expectedCollection: string,
 ): Promise<Principal> {
   const header = c.req.header("Authorization") ?? "";
+
+  // 1. API token?
+  const rawApiToken = parseApiToken(header);
+  if (rawApiToken) {
+    const tok = await resolveApiToken(c.env.SYSTEM_DB, rawApiToken);
+    if (tok) {
+      // Stamp last_used_at asynchronously — never block the response.
+      c.executionCtx.waitUntil(touchApiToken(c.env.SYSTEM_DB, tok.id));
+      return {
+        kind: "api-token",
+        apiTokenScope: tok.scopes,
+        apiTokenId: tok.id,
+        apiTokenCollectionScope: tok.collectionScope,
+      };
+    }
+    // Malformed/revoked/expired API token → treat as anonymous so the
+    // rule evaluator returns the proper 401/403 below.
+    return { kind: "anonymous" };
+  }
+
   const m = header.match(/^Bearer\s+(.+)$/i);
   if (!m) return { kind: "anonymous" };
   const token = m[1]!;
 
-  // Try collection JWT first (most likely path for client traffic).
+  // 2. Collection JWT (most likely path for client traffic).
   const collectionPayload = await verifyCollectionToken(token, c.env.AUTH_SECRET, expectedCollection);
   if (collectionPayload) {
     return {
@@ -107,7 +151,7 @@ async function resolvePrincipal(
     };
   }
 
-  // Fall back to dashboard superuser JWT.
+  // 3. Dashboard superuser JWT.
   const dashPayload = await verifyToken(token, c.env.AUTH_SECRET);
   if (dashPayload) {
     return { kind: "superuser", role: dashPayload.role };
@@ -178,6 +222,10 @@ export const recordsRouter = new Hono<{ Bindings: Env }>();
 /**
  * Fetch the collection metadata + principal, enforce the per-op rule.
  * Returns a 401/403 response on auth failure, or `null` to continue.
+ *
+ * API-token principals bypass per-collection `apiRules` (tokens are
+ * admin-issued) but are still gated by the token's scope against the
+ * HTTP method, and by an optional `collectionScope` restriction.
  */
 async function gate(
   c: Parameters<MiddlewareHandler<{ Bindings: Env }>>[0],
@@ -195,6 +243,25 @@ async function gate(
   if (!collection) return c.json({ error: "not_found" }, 404);
 
   const principal = await resolvePrincipal(c, name);
+
+  // ── API-token path: scope + collectionScope checks, bypass apiRules ──
+  if (principal.kind === "api-token") {
+    if (principal.apiTokenCollectionScope && principal.apiTokenCollectionScope !== name) {
+      return c.json(
+        { error: "api_token_collection_scope_mismatch", allowed: principal.apiTokenCollectionScope },
+        403,
+      );
+    }
+    const need = scopeForMethod(c.req.method);
+    if (!scopeSatisfies(principal.apiTokenScope!, need)) {
+      return c.json(
+        { error: "api_token_insufficient_scope", need, have: principal.apiTokenScope },
+        403,
+      );
+    }
+    return { collection, principal };
+  }
+
   const rule = collection[ruleKey];
 
   // No rule → deny (rule-explicit BaaS semantics).

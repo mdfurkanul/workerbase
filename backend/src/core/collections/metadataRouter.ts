@@ -136,19 +136,59 @@ async function resolveLiveSchema(
   db: D1Database,
   name: string,
   stored: FieldDefinition[] | null,
-): Promise<{ name: string; type: string }[]> {
+): Promise<FieldDefinition[]> {
   const pragmaCols = await fetchPragmaColumns(db, name);
   if (pragmaCols.length === 0) return [];
 
-  // No stored schema — return raw PRAGMA types.
-  if (!stored || stored.length === 0) return pragmaCols;
+  // No stored schema — synthesize minimal FieldDefinitions from PRAGMA so
+  // the dashboard still sees real columns. Synthesized ids are stable for
+  // the session (a function of column name) so toggling flags in the UI
+  // then saving does not look like a drop+add.
+  if (!stored || stored.length === 0) {
+    return pragmaCols.map((col) => ({
+      id: `col_${col.name}`,
+      name: col.name,
+      type: col.type as FieldDefinition["type"],
+      required: false,
+      unique: false,
+      hidden: false,
+      options: {},
+    }));
+  }
 
-  // Map stored field types onto matching columns for richer display.
+  // Merge stored FieldDefinitions (rich metadata + stable id) with the
+  // live PRAGMA columns.
+  //
+  // ORDERING: we iterate the STORED schema, not PRAGMA. SQLite physically
+  // appends every ALTER TABLE ADD COLUMN to the end of the table, so
+  // PRAGMA order ≠ the order the user arranged in the editor. The stored
+  // schema is the source of truth for both metadata and ordering. Any
+  // live PRAGMA columns that aren't in the stored schema (e.g. columns
+  // added directly in SQL, or freshly-injected auth columns) are appended
+  // at the end so they remain visible without disturbing the user's
+  // intended field order.
+  const pragmaNames = new Set(pragmaCols.map((c) => c.name));
   const storedByName = new Map(stored.map((f) => [f.name, f]));
-  return pragmaCols.map((col) => {
-    const match = storedByName.get(col.name);
-    return match ? { name: col.name, type: match.type } : col;
-  });
+
+  const ordered: FieldDefinition[] = stored
+    .filter((f) => pragmaNames.has(f.name))
+    .map((f) => storedByName.get(f.name)!);
+
+  for (const col of pragmaCols) {
+    if (!storedByName.has(col.name)) {
+      ordered.push({
+        id: `col_${col.name}`,
+        name: col.name,
+        type: col.type as FieldDefinition["type"],
+        required: false,
+        unique: false,
+        hidden: false,
+        options: {},
+      });
+    }
+  }
+
+  return ordered;
 }
 
 /** Escape a literal string for safe embedding inside a RegExp constructor. */
@@ -505,22 +545,38 @@ metadataRouter.delete("/:name", requireAuth, requireRole("admin"), async (c) => 
     return c.json({ error: "invalid collection name" }, 400);
   }
 
-  // 1. Check the collection actually exists in the data DB.
+  // 1. Drop the physical table/view if it still exists. We intentionally
+  //    do NOT 404 when sqlite_master has no row — the metadata row in
+  //    `_collections` may still be present (orphan from a prior partial
+  //    delete) and must still be cleaned up. Previously this returned 404
+  //    early and left the `_collections` row behind, which made deleted
+  //    collections reappear in DB queries.
   const row = await c.env.SYSTEM_DB.prepare(
     `SELECT type FROM sqlite_master WHERE type IN ('table','view') AND name = ?`,
   ).bind(name).first<{ type: string }>();
-  if (!row) return c.json({ error: "not_found" }, 404);
 
-  // 2. Drop the physical table (or view).
-  try {
-    if (row.type === "view") {
-      await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${name}"`);
-    } else {
-      await c.env.SYSTEM_DB.exec(`DROP TABLE IF EXISTS "${name}"`);
+  if (row) {
+    try {
+      if (row.type === "view") {
+        await c.env.SYSTEM_DB.exec(`DROP VIEW IF EXISTS "${name}"`);
+      } else {
+        await c.env.SYSTEM_DB.exec(`DROP TABLE IF EXISTS "${name}"`);
+      }
+    } catch (err) {
+      // Surface the error — a failed DROP used to be silently swallowed,
+      // leaving the table AND metadata in place while the UI reported
+      // success. Better to fail loudly so the user can retry.
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "drop_failed", detail: msg }, 500);
     }
-  } catch {
-    // Non-fatal — the table might already be gone.
   }
+
+  // 2. Remove the metadata row. This is the source of truth for the
+  //    dashboard's collection list enrichment (type, schema, query) and
+  //    must be deleted even if the physical table was already gone.
+  await c.env.SYSTEM_DB.prepare(
+    `DELETE FROM _collections WHERE name = ?`,
+  ).bind(name).run();
 
   return c.json({ success: true });
 });

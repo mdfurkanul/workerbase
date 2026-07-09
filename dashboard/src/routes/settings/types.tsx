@@ -6,6 +6,7 @@ import {
   Globe,
   HardDrive,
   Home,
+  Key,
   Mail,
   Mailbox,
   Upload,
@@ -19,6 +20,7 @@ export type SectionId =
   | "storage"
   | "backups"
   | "crons"
+  | "apiTokens"
   | "export"
   | "import"
   | "debug";
@@ -44,6 +46,7 @@ export const NAV: NavGroup[] = [
       { id: "storage", label: "Files storage", icon: <FolderOpen size={13} /> },
       { id: "backups", label: "Backups", icon: <HardDrive size={13} /> },
       { id: "crons", label: "Crons", icon: <Clock size={13} /> },
+      { id: "apiTokens", label: "API tokens", icon: <Key size={13} /> },
     ],
   },
   {
@@ -67,6 +70,7 @@ export const LABELS: Record<SectionId, string> = {
   storage: "Files storage",
   backups: "Backups",
   crons: "Crons",
+  apiTokens: "API tokens",
   export: "Export collections",
   import: "Import collections",
   debug: "Debug",

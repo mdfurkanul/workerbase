@@ -7,7 +7,7 @@ import RecordDrawer from "@/components/RecordDrawer";
 import SelectionBar from "@/components/SelectionBar";
 import Modal from "@/components/Modal";
 import { useAuth, canEdit } from "@/hooks/useAuth";
-import { type Record as Row, type Collection } from "@/lib/types";
+import { type Record as Row, type Collection, type CollectionField } from "@/lib/types";
 import { apiClient, getToken } from "@/lib/api-client";
 import { collectionAllowsRecordEdits } from "./helpers";
 
@@ -19,7 +19,7 @@ export function RecordsTable({
   onNewRecord,
 }: {
   collectionName: string;
-  schema: { name: string; type: string }[];
+  schema: CollectionField[];
   collectionType: Collection["type"];
   onNewRecord?: () => void;
 }) {
@@ -46,7 +46,7 @@ export function RecordsTable({
 
   // Visible columns — default to ALL selected on every visit.
   const allColumns = useMemo(
-    () => (schema.length ? schema : [{ name: "id", type: "text" }]),
+    () => (schema.length ? schema : [{ id: "id", name: "id", type: "text" }] as CollectionField[]),
     [schema],
   );
   const [visible, setVisible] = useState<string[]>(() => allColumns.map((c) => c.name));

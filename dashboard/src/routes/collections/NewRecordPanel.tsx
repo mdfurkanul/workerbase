@@ -1,8 +1,11 @@
 import { useState } from "react";
-import { type Collection } from "@/lib/types";
+import { type Collection, type CollectionField } from "@/lib/types";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { usePrefs } from "@/hooks/usePrefs";
-import { wallClockToEpochMs } from "@/lib/dateTimeFormat";
+import { RecordField } from "@/components/record-fields/RecordField";
+import { GeoField, validateGeo } from "@/components/record-fields/GeoField";
+import { groupFieldsForForm } from "@/components/record-fields/grouping";
+import { coerceForPayload } from "@/components/record-fields/coerce";
 
 /* ─── SlideOver panel: new record ─────────────────────────────────── */
 export function NewRecordPanel({
@@ -12,7 +15,7 @@ export function NewRecordPanel({
   onCreated,
   registerSave,
 }: {
-  schema: { name: string; type: string }[];
+  schema: CollectionField[];
   collectionName: string;
   collectionType: Collection["type"];
   onCreated: () => void;
@@ -29,51 +32,43 @@ export function NewRecordPanel({
   // password_hash + password_salt automatically (the raw columns are hidden).
   const PROTECTED = new Set(["id", "created", "updated", "created_at", "updated_at", "rowid", "token_key", "password_hash", "password_salt", "verified"]);
   const userFields = schema.filter((f) => !PROTECTED.has(f.name));
-  const fields: { name: string; type: string; required?: boolean }[] =
+  const fields: CollectionField[] =
     collectionType === "user"
-      ? [{ name: "password", type: "password", required: true }, ...userFields]
+      ? [{ id: "_password", name: "password", type: "password", required: true }, ...userFields]
       : userFields;
+
+  const slots = groupFieldsForForm(fields);
 
   async function handleSave() {
     setSubmitError(null);
 
-    // Validate each field based on its type.
+    // Validate each field by type. The RecordField component reports
+    // errors via onErrorChange into `errors` already; here we only block
+    // on whatever is currently set.
     const errs: Record<string, string> = {};
-    for (const f of fields) {
-      const raw = (values[f.name] ?? "").trim();
-      const isRequired = f.required === true;
-      if (raw === "") {
-        if (isRequired) errs[f.name] = `${f.name} is required`;
-        continue;
-      }
+    for (const [k, v] of Object.entries(errors)) {
+      if (v) errs[k] = v;
+    }
 
-      switch (f.type) {
-        case "integer":
-          if (!/^-?\d+$/.test(raw)) errs[f.name] = `${f.name} must be a whole number`;
-          break;
-        case "real":
-          if (isNaN(Number(raw))) errs[f.name] = `${f.name} must be a valid number`;
-          break;
-        case "email":
-          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) errs[f.name] = `${f.name} must be a valid email address`;
-          break;
-        case "url":
-          if (!/^https?:\/\/.+/.test(raw)) errs[f.name] = `${f.name} must be a valid URL (starting with http:// or https://)`;
-          break;
-        case "password":
-          if (raw.length < 8) errs[f.name] = `Password must be at least 8 characters`;
-          break;
-        case "bool":
-          if (!["true", "false", "1", "0"].includes(raw.toLowerCase())) errs[f.name] = `${f.name} must be true or false`;
-          break;
+    // Geo validation runs separately because each pair has TWO inputs.
+    for (const s of slots) {
+      if (s.kind !== "geo") continue;
+      const lat = (values[`${s.base}_latitude`] ?? "").trim();
+      const lon = (values[`${s.base}_longitude`] ?? "").trim();
+      const required = s.latField.required || s.lonField.required;
+      if (required && lat === "" && lon === "") {
+        errs[`${s.base}_latitude`] = `${s.base} is required`;
+      } else {
+        const g = validateGeo(lat, lon);
+        if (g.lat) errs[`${s.base}_latitude`] = g.lat;
+        if (g.lon) errs[`${s.base}_longitude`] = g.lon;
       }
     }
 
-    if (Object.keys(errs).length > 0) {
+    if (Object.keys(errs).filter((k) => errs[k]).length > 0) {
       setErrors(errs);
       return;
     }
-    setErrors({});
 
     setBusy(true);
     try {
@@ -81,39 +76,20 @@ export function NewRecordPanel({
       const payload: Record<string, unknown> = {};
       for (const f of fields) {
         const v = (values[f.name] ?? "").trim();
-        if (v !== "") {
-          if (f.type === "integer") payload[f.name] = parseInt(v, 10);
-          else if (f.type === "real") payload[f.name] = parseFloat(v);
-          else if (f.type === "bool") payload[f.name] = v === "true" || v === "1";
-          else if (f.type === "datetime") {
-            // Wall-clock value typed in the user's TZ → epoch ms.
-            const ms = wallClockToEpochMs(v, timezone);
-            payload[f.name] = ms ?? v;
-          }
-          else if (f.type === "date") {
-            payload[f.name] = v.slice(0, 10);
-          }
-          else payload[f.name] = v;
-        }
+        if (v === "") continue;
+        payload[f.name] = coerceForPayload(f.type, v, timezone);
       }
 
       await apiClient.post(`/api/core/collections/${encodeURIComponent(collectionName)}/records`, payload);
       onCreated();
     } catch (err) {
-      // The backend returns { error, fieldErrors?, detail? } on validation
-      // failures. ApiError already extracts `detail`; fieldErrors comes
-      // through as part of the raw response body which we re-fetch here.
       if (err instanceof ApiError) {
-        // err.detail is the raw body — for validation_failed it's
-        // { fieldErrors: {...} }, otherwise a string detail.
         const body = err.detail as
           | { fieldErrors?: Record<string, string>; detail?: string }
           | string
           | null;
         if (body && typeof body === "object" && body.fieldErrors) {
           setErrors(body.fieldErrors);
-          // Still surface a top-line summary so the user sees something
-          // even if the offending field is scrolled out of view.
           const count = Object.keys(body.fieldErrors).length;
           setSubmitError(
             `${count} field${count === 1 ? "" : "s"} failed validation — see inline errors below.`,
@@ -144,64 +120,60 @@ export function NewRecordPanel({
           {submitError}
         </div>
       )}
-      {fields.length === 0 ? (
+      {slots.length === 0 ? (
         <p className="text-[13px] text-ink-muted">
           This collection has no editable fields yet.
         </p>
       ) : (
-        fields.map((f) => {
-          const inputType =
-            f.type === "integer" || f.type === "real"
-              ? "number"
-              : f.type === "password"
-                ? "password"
-                : f.type === "datetime"
-                  ? "datetime-local"
-                  : f.type === "date"
-                    ? "date"
-                    : "text";
-          const requiredMark = f.required ? " *" : "";
-          return (
-          <label key={f.name} className="block">
-            <span className="label-mono">
-              {f.name}{requiredMark}{" "}
-              <span className="text-ink-faint normal-case font-normal">· {f.type}</span>
-            </span>
-            {f.type === "bool" ? (
-              <select
-                value={values[f.name] ?? ""}
-                onChange={(e) => {
-                  setValues((v) => ({ ...v, [f.name]: e.target.value }));
-                  setErrors((er) => ({ ...er, [f.name]: "" }));
+        slots.map((slot) => {
+          if (slot.kind === "geo") {
+            const latKey = `${slot.base}_latitude`;
+            const lonKey = `${slot.base}_longitude`;
+            const lat = values[latKey] ?? "";
+            const lon = values[lonKey] ?? "";
+            const gErr = validateGeo(lat, lon);
+            return (
+              <GeoField
+                key={`geo-${slot.base}`}
+                label={slot.base}
+                required={slot.latField.required || slot.lonField.required}
+                lat={lat}
+                lon={lon}
+                onLatChange={(v) => {
+                  setValues((s) => ({ ...s, [latKey]: v }));
+                  setErrors((e) => ({ ...e, [latKey]: gErr.lat ?? "" }));
                   setSubmitError(null);
                 }}
-                className="field-input mt-1"
-              >
-                <option value="">— unset —</option>
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            ) : (
-              <input
-                type={inputType}
-                value={values[f.name] ?? ""}
-                onChange={(e) => {
-                  setValues((v) => ({ ...v, [f.name]: e.target.value }));
-                  setErrors((er) => ({ ...er, [f.name]: "" }));
+                onLonChange={(v) => {
+                  setValues((s) => ({ ...s, [lonKey]: v }));
+                  setErrors((e) => ({ ...e, [lonKey]: gErr.lon ?? "" }));
                   setSubmitError(null);
                 }}
-                placeholder={
-                  f.type === "password"
-                    ? "At least 8 characters"
-                    : `Enter ${f.type} value`
-                }
-                className={`field-input mt-1 ${errors[f.name] ? "border-err" : ""}`}
+                errorLat={errors[latKey] || undefined}
+                errorLon={errors[lonKey] || undefined}
               />
-            )}
-            {errors[f.name] && (
-              <div className="text-err text-[12px] mt-1">{errors[f.name]}</div>
-            )}
-          </label>
+            );
+          }
+          const f = slot.field;
+          return (
+            <RecordField
+              key={f.id ?? f.name}
+              field={f}
+              value={values[f.name] ?? ""}
+              onChange={(v) => {
+                setValues((s) => ({ ...s, [f.name]: typeof v === "string" ? v : String(v) }));
+                setSubmitError(null);
+              }}
+              onErrorChange={(err) => {
+                setErrors((e) => {
+                  const next = { ...e };
+                  if (err) next[f.name] = err;
+                  else delete next[f.name];
+                  return next;
+                });
+              }}
+              error={errors[f.name] || undefined}
+            />
           );
         })
       )}
