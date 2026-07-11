@@ -134,6 +134,10 @@ async function request<T>(
     query?: Record<string, unknown>;
     headers?: Record<string, string>;
     signal?: AbortSignal;
+    /** When true, a 401 response throws without clearing the token or
+     *  redirecting to /login. Used by auth-flow endpoints (magic-verify,
+     *  reset-password) where 401 means "invalid token", not "session expired". */
+    skipAuthRedirect?: boolean;
   } = {},
 ): Promise<T> {
   const url = buildUrl(path, opts.query);
@@ -159,10 +163,12 @@ async function request<T>(
   }
 
   if (res.status === 401) {
-    clearToken();
-    // Guard against redirect loops when already on /login.
-    if (!window.location.pathname.startsWith("/login")) {
-      window.location.href = "/login";
+    if (!opts.skipAuthRedirect) {
+      clearToken();
+      // Guard against redirect loops when already on /login.
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
     }
     // Still throw so the caller can react in-memory.
     throw new ApiError(401, "unauthorized", null);
@@ -202,7 +208,7 @@ export const apiClient = {
   get<T>(
     path: string,
     query?: Record<string, unknown>,
-    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal; skipAuthRedirect?: boolean },
   ): Promise<T> {
     return request<T>("GET", path, { query, ...opts });
   },
@@ -210,7 +216,7 @@ export const apiClient = {
   post<T>(
     path: string,
     body?: unknown,
-    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal; skipAuthRedirect?: boolean },
   ): Promise<T> {
     return request<T>("POST", path, { body, ...opts });
   },
@@ -218,7 +224,7 @@ export const apiClient = {
   put<T>(
     path: string,
     body?: unknown,
-    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal; skipAuthRedirect?: boolean },
   ): Promise<T> {
     return request<T>("PUT", path, { body, ...opts });
   },
@@ -226,14 +232,14 @@ export const apiClient = {
   patch<T>(
     path: string,
     body?: unknown,
-    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal; skipAuthRedirect?: boolean },
   ): Promise<T> {
     return request<T>("PATCH", path, { body, ...opts });
   },
 
   del<T>(
     path: string,
-    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal; skipAuthRedirect?: boolean },
   ): Promise<T> {
     return request<T>("DELETE", path, opts);
   },

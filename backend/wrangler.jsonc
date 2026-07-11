@@ -35,6 +35,14 @@
     { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
   ],
 
+  // Cloudflare Email Service — simulated locally (logged to console +
+  // saved to temp files by wrangler). Use `remote: true` to send real
+  // emails from local dev. See:
+  // https://developers.cloudflare.com/email-service/local-development/sending/
+  "send_email": [
+    { "name": "EMAIL" }
+  ],
+
   "observability": { "enabled": true },
 
   // Hourly cron — the scheduled handler in src/index.ts reads the
@@ -48,7 +56,10 @@
     // ── Local ──
     "local": {
       "name": "workerbase-local",
-      "vars": { "ENVIRONMENT": "local" },
+      "vars": {
+        "ENVIRONMENT": "local",
+        "DASHBOARD_URL": "http://localhost:5173"
+      },
       "d1_databases": [
         {
           "binding": "SYSTEM_DB",
@@ -66,6 +77,9 @@
           { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
         ]
       },
+      "send_email": [
+        { "name": "EMAIL" }
+      ],
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
         { "tag": "v2", "new_classes": ["RateLimiter"] }
@@ -96,6 +110,9 @@
           { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
         ]
       },
+      "send_email": [
+        { "name": "EMAIL" }
+      ],
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
         { "tag": "v2", "new_classes": ["RateLimiter"] }
@@ -126,6 +143,9 @@
           { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
         ]
       },
+      "send_email": [
+        { "name": "EMAIL" }
+      ],
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
         { "tag": "v2", "new_classes": ["RateLimiter"] }

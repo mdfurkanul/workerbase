@@ -51,6 +51,7 @@ export async function apiMagicVerify(token: string): Promise<AuthResponse> {
   const res = await apiClient.get<AuthResponse>(
     "/api/core/superusers/magic-verify",
     { token },
+    { skipAuthRedirect: true },
   );
   setToken(res.token);
   return res;
@@ -80,6 +81,7 @@ export async function apiResetPassword(
   const res = await apiClient.post<AuthResponse>(
     "/api/core/superusers/reset-password",
     { token, password },
+    { skipAuthRedirect: true },
   );
   setToken(res.token);
   return res;

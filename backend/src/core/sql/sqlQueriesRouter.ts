@@ -178,6 +178,49 @@ const executeSchema = z.object({
   sql: z.string().min(1).max(8192),
 });
 
+/**
+ * Table-name prefixes / exact names that are off-limits to the SQL console.
+ *
+ *   _…            — WorkerBase system tables (_superusers, _tokens, …)
+ *   sqlite_…      — SQLite virtual tables (sqlite_master, sqlite_sequence, …)
+ *   _cf_…         — Cloudflare-internal D1 tables
+ *   d1_…          — D1 runtime tables
+ *   _wb_restore_… — shadow-swap scratch tables from backup restores
+ *
+ * All of these store sensitive data (password hashes, session tokens, config)
+ * or are runtime-protected by D1 (DROP returns SQLITE_AUTH). Blocking them in
+ * the SQL console is defense-in-depth: even though only SELECT is allowed,
+ * exposing password hashes or token values through a SELECT would be a
+ * serious leak.
+ */
+const PROTECTED_TABLE_PATTERNS = [
+  /^_/, // any underscore-prefixed table (WorkerBase system tables)
+  /^sqlite_/i,
+  /^_cf_/i,
+  /^d1_/i,
+  /^_wb_restore_/i,
+];
+
+/** True if the table name is a protected system table. */
+export function isProtectedTable(name: string): boolean {
+  return PROTECTED_TABLE_PATTERNS.some((re) => re.test(name));
+}
+
+/**
+ * Extract table names referenced in FROM / JOIN clauses and check them
+ * against the protected-table list. Catches sub-selects and CTEs because
+ * the regex scans the entire SQL string.
+ */
+function referencesProtectedTable(sql: string): string | null {
+  const tablePattern = /\b(?:FROM|JOIN)\s+["'`]?(\w+)["'`]?\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = tablePattern.exec(sql)) !== null) {
+    const table = match[1]!;
+    if (isProtectedTable(table)) return table;
+  }
+  return null;
+}
+
 function isSafeSelect(raw: string): boolean {
   const q = raw.trim();
   if (!q || q.includes(";")) return false;

@@ -16,6 +16,11 @@ export const loginSchema = z.object({
   password: passwordSchema,
 });
 
+/** Email-only schema — used by magic-link and forgot-password forms. */
+export const emailOnlySchema = z.object({
+  email: emailSchema,
+});
+
 /* ─── Collection schemas ────────────────────────────────────────── */
 export const collectionNameSchema = z
   .string()

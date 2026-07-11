@@ -5,10 +5,10 @@ import Field from "@/components/Field";
 import { apiForgotPassword } from "@/lib/api-superusers";
 import { ApiError } from "@/lib/api-client";
 import { useFormValidation } from "@/hooks/useFormValidation";
-import { loginSchema } from "@/lib/validation";
+import { emailOnlySchema } from "@/lib/validation";
 
 type Stage = "request" | "sent";
-type EmailForm = { email: string; password: string };
+type EmailForm = { email: string };
 
 export default function ForgotPassword() {
   const [stage, setStage] = useState<Stage>("request");
@@ -22,7 +22,7 @@ export default function ForgotPassword() {
     setValue,
     onBlur,
     validateAll,
-  } = useFormValidation<EmailForm>(loginSchema, { email: "", password: "" });
+  } = useFormValidation<EmailForm>(emailOnlySchema, { email: "" });
 
   const emailValid = !errors.email && touched.email;
 

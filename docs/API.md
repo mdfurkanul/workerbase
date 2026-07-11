@@ -120,6 +120,7 @@ File: `backend/src/core/auth/superuserRouter.ts`
 - **Auth:** None
 - **Body:** `email` (string, email, ≤ 254, required)
 - **Response 200:** `{ success: true }` (always 200 — never reveals if email exists)
+- **Email:** Sends a magic-link email via the Cloudflare Email Service binding (`EMAIL`). The link points to `{origin}/magic-login?token=...` (frontend route). Simulated locally by `wrangler dev` (logged to console + temp files).
 
 ### `GET /api/core/superusers/magic-verify`
 - **Auth:** None
@@ -130,6 +131,7 @@ File: `backend/src/core/auth/superuserRouter.ts`
 - **Auth:** None
 - **Body:** `email` (string, email, ≤ 254, required)
 - **Response 200:** `{ success: true }` (always 200)
+- **Email:** Sends a password-reset email via the Cloudflare Email Service binding (`EMAIL`). The link points to `{origin}/reset-password?token=...` (frontend route). Simulated locally by `wrangler dev` (logged to console + temp files).
 
 ### `POST /api/core/superusers/reset-password`
 - **Auth:** None

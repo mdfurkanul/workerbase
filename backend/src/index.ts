@@ -238,6 +238,22 @@ app.route("/api/collections", publicApi);
 // Unmatched /api/* must NOT serve the SPA index.html.
 app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
+// In local dev the dashboard runs on the Vite dev server, not the Worker
+// (serveStatic can't resolve __STATIC_CONTENT_MANIFEST under wrangler dev).
+// When DASHBOARD_URL is set, redirect any non-API GET request (e.g. email
+// magic-link / reset-password landing URLs) to the same path on the Vite
+// server. Skips non-GET and API requests.
+app.get("/*", async (c, next) => {
+  const dashboardURL = c.env.DASHBOARD_URL?.replace(/\/$/, "");
+  if (!dashboardURL) {
+    await next();
+    return;
+  }
+  const reqURL = new URL(c.req.url);
+  const target = `${dashboardURL}${reqURL.pathname}${reqURL.search}`;
+  return c.redirect(target, 302);
+});
+
 // Dashboard assets compiled by Vite into ./public.
 app.use("/*", serveStatic({ root: "./public" }));
 

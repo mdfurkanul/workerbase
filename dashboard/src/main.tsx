@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import SignIn from "@/routes/SignIn";
 import MagicLogin from "@/routes/MagicLogin";
 import ForgotPassword from "@/routes/ForgotPassword";
+import ResetPassword from "@/routes/ResetPassword";
 import Overview from "@/routes/Overview";
 import Collections from "@/routes/Collections";
 import NewCollection from "@/routes/NewCollection";
@@ -25,6 +26,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="/login" element={<SignIn />} />
         <Route path="/magic-login" element={<MagicLogin />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
         {/* Protected */}
         <Route

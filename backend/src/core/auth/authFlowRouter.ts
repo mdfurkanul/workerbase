@@ -17,6 +17,19 @@ import {
   createSuperuserSchema,
   normalizeRole,
 } from "./superuserSchemas.js";
+import { sendEmail } from "../../emails/sendEmail.js";
+
+/**
+ * Resolve the base URL that email action links should point at.
+ *
+ * In local dev the dashboard runs on the Vite dev server (e.g.
+ * http://localhost:5173) because the Worker's serveStatic can't serve the
+ * SPA bundle from `wrangler dev`. In production this is unset and we fall
+ * back to the request origin — the Worker serves the built dashboard.
+ */
+function dashboardBaseURL(env: Env, reqURL: URL): string {
+  return env.DASHBOARD_URL?.replace(/\/$/, "") ?? `${reqURL.origin}`;
+}
 
 /**
  * Auth-flow sub-router for the superuser auth routes.
@@ -122,9 +135,20 @@ authFlowRouter.post("/magic-request", async (c) => {
   );
 
   const url = new URL(c.req.url);
-  const actionURL = `${url.origin}/api/core/superusers/magic-verify?token=${value}`;
+  const actionURL = `${dashboardBaseURL(c.env, url)}/magic-login?token=${value}`;
 
-  // Only log in local dev — never expose tokens in production logs.
+  // Always attempt delivery via the Email Service binding (simulated
+  // locally — wrangler logs the content to the console). Also keep a
+  // dev-only console log so the token is visible without digging through
+  // the simulated email files.
+  c.executionCtx.waitUntil(
+    sendEmail(c.env, {
+      to: row.email,
+      template: "magicLink",
+      vars: { email: row.email, actionURL },
+    }),
+  );
+
   if (c.env.ENVIRONMENT === "local") {
     console.log(`[dev-only] magic-link for ${row.email}: ${actionURL}`);
   }
@@ -208,7 +232,15 @@ authFlowRouter.post("/forgot-password", async (c) => {
   );
 
   const url = new URL(c.req.url);
-  const actionURL = `${url.origin}/reset-password?token=${value}`;
+  const actionURL = `${dashboardBaseURL(c.env, url)}/reset-password?token=${value}`;
+
+  c.executionCtx.waitUntil(
+    sendEmail(c.env, {
+      to: row.email,
+      template: "resetPassword",
+      vars: { email: row.email, actionURL },
+    }),
+  );
 
   if (c.env.ENVIRONMENT === "local") {
     console.log(`[dev-only] password-reset for ${row.email}: ${actionURL}`);
