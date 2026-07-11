@@ -334,6 +334,7 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
   let existingHasId = true;
   let existingHasCreatedAt = true;
   let existingHasUpdatedAt = true;
+  let existingIsAutoIncrement = false;
   if (target.mode === "existing") {
     try {
       const { results } = await db.prepare(`PRAGMA table_info("${collectionName}")`).all<{ name: string }>();
@@ -344,8 +345,19 @@ importRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
     } catch {
       // PRAGMA failed — assume defaults.
     }
+    // Check if the collection uses autoincrement IDs — if so, don't
+    // push a UUID; let SQLite assign the rowid.
+    try {
+      const meta = await db
+        .prepare(`SELECT id_type FROM _collections WHERE name = ?`)
+        .bind(collectionName)
+        .first<{ id_type: string | null }>();
+      existingIsAutoIncrement = meta?.id_type === "autoincrement";
+    } catch {
+      // Metadata lookup failed — assume UUID.
+    }
   }
-  const includeId = target.mode === "new" ? wantIdPk : existingHasId;
+  const includeId = target.mode === "new" ? wantIdPk : (existingHasId && !existingIsAutoIncrement);
   const includeCreatedAt = target.mode === "new"
     ? target.addCreatedAt === true
     : existingHasCreatedAt;

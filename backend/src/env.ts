@@ -13,6 +13,8 @@ export interface Env {
   STORAGE: R2Bucket;
   /** Durable Objects — one RealtimeHub instance per collection name. */
   REALTIME: DurableObjectNamespace;
+  /** Durable Object — single global RateLimiter instance for rate limit counters. */
+  RATE_LIMITER: DurableObjectNamespace;
   /** HMAC secret used to sign/verify session tokens. Set in `.dev.vars`. */
   AUTH_SECRET: string;
   /** Set by wrangler.jsonc `vars` — "local" | "preprod" | "prod". */

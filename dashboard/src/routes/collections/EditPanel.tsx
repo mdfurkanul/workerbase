@@ -34,49 +34,62 @@ export function buildEditFields(collection: Collection): SchemaField[] {
     unique: f.unique ?? false,
     hidden: f.hidden ?? false,
     options: (f.options as SchemaField["options"]) ?? {},
-    locked: !!f.system || ["id", "created", "updated", "created_at"].includes(f.name),
+    locked: !!f.system || ["id", "created", "updated", "created_at", "updated_at"].includes(f.name),
     primaryKey: !!f.primaryKey || f.name === "id",
-    auto: !!f.auto || f.name === "created" || f.name === "updated",
+    auto: !!f.auto || ["created", "updated", "created_at", "updated_at"].includes(f.name),
   }));
 
-  if (collection.type !== "user") return baseFields;
+  let out: SchemaField[] = baseFields;
 
-  const existing = new Set(baseFields.map((f) => f.name));
-  const out = baseFields.map((f) =>
-    f.name === "email"
-      ? { ...f, locked: true, auto: true, authField: true, required: true, unique: true }
-      : f,
-  );
+  if (collection.type === "user") {
+    const existing = new Set(baseFields.map((f) => f.name));
+    out = baseFields.map((f) =>
+      f.name === "email"
+        ? { ...f, locked: true, auto: true, authField: true, required: true, unique: true }
+        : f,
+    );
 
-  if (!existing.has("email")) {
-    out.push({
-      cid: "auth_email",
-      name: "email",
-      type: "text",
-      required: true,
-      unique: true,
-      hidden: false,
-      options: {},
-      locked: true,
-      auto: true,
-      authField: true,
-    });
+    if (!existing.has("email")) {
+      out.push({
+        cid: "auth_email",
+        name: "email",
+        type: "text",
+        required: true,
+        unique: true,
+        hidden: false,
+        options: {},
+        locked: true,
+        auto: true,
+        authField: true,
+      });
+    }
+    if (!existing.has("password")) {
+      out.push({
+        cid: "auth_password",
+        name: "password",
+        type: "text",
+        required: true,
+        unique: false,
+        hidden: true,
+        options: {},
+        locked: true,
+        auto: true,
+        authField: true,
+      });
+    }
   }
-  if (!existing.has("password")) {
-    out.push({
-      cid: "auth_password",
-      name: "password",
-      type: "text",
-      required: true,
-      unique: false,
-      hidden: true,
-      options: {},
-      locked: true,
-      auto: true,
-      authField: true,
-    });
-  }
-  return out;
+
+  // Enforce system column positions: `id` always first, `created_at`/
+  // `updated_at` always last. User-defined + auth fields stay in the
+  // middle in their stored order. This mirrors the physical DDL layout
+  // and keeps the editor predictable regardless of what order the
+  // backend or PRAGMA returned columns in.
+  const SYSTEM_FIRST = new Set(["id"]);
+  const SYSTEM_LAST = new Set(["created_at", "updated_at"]);
+  const first = out.filter((f) => SYSTEM_FIRST.has(f.name));
+  const middle = out.filter((f) => !SYSTEM_FIRST.has(f.name) && !SYSTEM_LAST.has(f.name));
+  const last = out.filter((f) => SYSTEM_LAST.has(f.name));
+  return [...first, ...middle, ...last];
 }
 
 export function EditPanel({
@@ -89,6 +102,8 @@ export function EditPanel({
   registerSave: (fn: () => boolean | Promise<boolean | void>) => void;
 }) {
   const [name, setName] = useState(collection.name);
+  const idType = collection.idType ?? "uuid";
+  const idStart = collection.idStart;
   const [authSettings, setAuthSettings] = useState<AuthSettings>(DEFAULT_AUTH_SETTINGS);
   const [emailTemplates, setEmailTemplates] = useState<EmailTemplates>(DEFAULT_TEMPLATES);
   const [editTab, setEditTab] = useState<"schema" | "auth" | "templates">("schema");
@@ -115,6 +130,8 @@ export function EditPanel({
     if (name.trim() && name !== collection.name) {
       payload.name = name.trim();
     }
+
+    // ID type is read-only on edit — set at creation time only.
 
     const fields = schemaData.current.fields
       .filter((f) => f.name && !f.authField)
@@ -266,6 +283,21 @@ export function EditPanel({
           </p>
         )}
       </section>
+
+      {/* ID type — read-only, set at creation time */}
+      {collection.type !== "view" && (
+        <section className="space-y-2">
+          <span className="label-mono">ID Type</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] text-ink">
+              {idType === "autoincrement"
+                ? `Auto-increment integer${idStart ? ` (starting from ${idStart})` : ""}`
+                : "Auto-generated hash (UUID)"}
+            </span>
+            <span className="text-[11px] text-ink-faint">— set at creation, cannot be changed</span>
+          </div>
+        </section>
+      )}
 
       {/* Status banners for the base/user save flow */}
       {collection.type !== "view" && (saveError || migrationInfo || saving) && (

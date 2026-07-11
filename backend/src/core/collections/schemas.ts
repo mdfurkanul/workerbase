@@ -22,6 +22,10 @@ export const fieldSchema = z.object({
   options: z.record(z.unknown()).optional().default({}),
 });
 
+/* ── ID type + start — shared by base/user create & patch ── */
+export const idTypeSchema = z.enum(["uuid", "autoincrement"]).optional();
+export const idStartSchema = z.number().int().min(1).optional();
+
 /* ── Index + constraint schemas ── */
 export const indexSchema = z.object({
   name: z.string().min(1).max(128),
@@ -41,6 +45,8 @@ export const createBaseSchema = z.object({
   schema: z.array(fieldSchema).min(1),
   indexes: z.array(indexSchema).optional(),
   constraints: z.array(constraintSchema).optional(),
+  idType: idTypeSchema,
+  idStart: idStartSchema,
   listRule: z.string().optional(),
   viewRule: z.string().optional(),
   createRule: z.string().optional(),
@@ -54,6 +60,8 @@ export const createUserSchema = z.object({
   schema: z.array(fieldSchema).optional(),
   indexes: z.array(indexSchema).optional(),
   constraints: z.array(constraintSchema).optional(),
+  idType: idTypeSchema,
+  idStart: idStartSchema,
   listRule: z.string().optional(),
   viewRule: z.string().optional(),
   createRule: z.string().optional(),
@@ -90,6 +98,8 @@ export const patchBaseSchema = z.object({
   schema: z.array(fieldSchema).optional(),
   indexes: z.array(indexSchema).optional(),
   constraints: z.array(constraintSchema).optional(),
+  idType: idTypeSchema,
+  idStart: idStartSchema,
   listRule: z.string().optional(),
   viewRule: z.string().optional(),
   createRule: z.string().optional(),
@@ -102,6 +112,8 @@ export const patchUserSchema = z.object({
   schema: z.array(fieldSchema).optional(),
   indexes: z.array(indexSchema).optional(),
   constraints: z.array(constraintSchema).optional(),
+  idType: idTypeSchema,
+  idStart: idStartSchema,
   listRule: z.string().optional(),
   viewRule: z.string().optional(),
   createRule: z.string().optional(),

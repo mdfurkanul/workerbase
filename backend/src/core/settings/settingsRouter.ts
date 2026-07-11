@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../../env.js";
 import { requireAuth, requireRole } from "../../auth/middleware.js";
+import { invalidateRateLimitCache } from "../../ratelimit/middleware.js";
 
 export const settingsRouter = new Hono<{ Bindings: Env }>();
 
@@ -79,6 +80,12 @@ settingsRouter.patch("/", requireAuth, requireRole("admin"), async (c) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: "settings_persist_failed", detail: msg }, 500);
+  }
+
+  // If rate limit settings changed, invalidate the in-memory cache so the
+  // middleware picks up the new config on the next request.
+  if (entries.some(([k]) => k === "rateLimit")) {
+    invalidateRateLimitCache();
   }
 
   // Re-read the full settings blob so callers can reconcile state without

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Plus } from "lucide-react";
 import AppShell, { PageHeader } from "@/components/AppShell";
@@ -23,6 +23,8 @@ export default function NewCollection() {
   const { refresh: refreshCollections } = useCollections();
   const [name, setName] = useState("");
   const [type, setType] = useState<CollectionType>("base");
+  const [idType, setIdType] = useState<"uuid" | "autoincrement">("uuid");
+  const [idStart, setIdStart] = useState<string>("");
   const [viewQuery, setViewQuery] = useState("");
   const [fields, setFields] = useState<Field[]>(makeSystemFields);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -51,6 +53,17 @@ export default function NewCollection() {
     setConstraints,
   });
 
+  // When idType changes, update the `id` system field's display type.
+  useEffect(() => {
+    setFields((prev) =>
+      prev.map((f) =>
+        f.name === "id" && f.primaryKey
+          ? { ...f, type: idType === "autoincrement" ? "integer" : "text" }
+          : f,
+      ),
+    );
+  }, [idType, setFields]);
+
   /* ─── Submit ────────────────────────────────────────────────────── */
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -73,6 +86,11 @@ export default function NewCollection() {
     if (type === "view") {
       payload.query = viewQuery;
     } else {
+      // ID type configuration
+      payload.idType = idType;
+      if (idType === "autoincrement" && idStart) {
+        payload.idStart = parseInt(idStart, 10);
+      }
       // Map the internal Field type to the backend's FieldDefinition shape.
       // Auth fields (email, password) are visual-only — backend auto-injects them.
       // Geo fields expand to two real columns: `<name>_lat` and `<name>_lng`.
@@ -181,6 +199,50 @@ export default function NewCollection() {
               {collectionTypeMeta(type).description}
             </p>
           </section>
+
+          {/* ID type — only for base/user collections */}
+          {type !== "view" && (
+            <section className="space-y-3">
+              <span className="label-mono">ID Type</span>
+              <div className="grid grid-cols-[2fr_1fr] gap-3">
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="idType"
+                      checked={idType === "uuid"}
+                      onChange={() => setIdType("uuid")}
+                      className="accent-brand w-4 h-4"
+                    />
+                    <span className="text-[13px] text-ink">Auto-generated hash (UUID)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="idType"
+                      checked={idType === "autoincrement"}
+                      onChange={() => setIdType("autoincrement")}
+                      className="accent-brand w-4 h-4"
+                    />
+                    <span className="text-[13px] text-ink">Auto-increment integer</span>
+                  </label>
+                </div>
+                {idType === "autoincrement" && (
+                  <label className="block">
+                    <span className="label-mono">Starting from</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={idStart}
+                      onChange={(e) => setIdStart(e.target.value)}
+                      placeholder="1"
+                      className="field-input mt-1 font-mono"
+                    />
+                  </label>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Tab bar */}
           <div className="flex items-center gap-1 hairline-b">

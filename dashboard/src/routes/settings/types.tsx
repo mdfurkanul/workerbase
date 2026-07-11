@@ -3,6 +3,7 @@ import {
   Clock,
   Download,
   FolderOpen,
+  Gauge,
   Globe,
   HardDrive,
   Home,
@@ -15,6 +16,7 @@ import {
 export type SectionId =
   | "application"
   | "timezone"
+  | "rateLimit"
   | "mail"
   | "systemEmails"
   | "storage"
@@ -41,6 +43,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "application", label: "Application", icon: <Home size={13} /> },
       { id: "timezone", label: "Timezone", icon: <Globe size={13} /> },
+      { id: "rateLimit", label: "Rate limiting", icon: <Gauge size={13} /> },
       { id: "mail", label: "Mail settings", icon: <Mail size={13} /> },
       { id: "systemEmails", label: "System emails", icon: <Mailbox size={13} /> },
       { id: "storage", label: "Files storage", icon: <FolderOpen size={13} /> },
@@ -65,6 +68,7 @@ export const NAV: NavGroup[] = [
 export const LABELS: Record<SectionId, string> = {
   application: "Application",
   timezone: "Timezone",
+  rateLimit: "Rate limiting",
   mail: "Mail settings",
   systemEmails: "System emails",
   storage: "Files storage",

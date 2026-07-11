@@ -20,9 +20,11 @@ import {
   levelFromStatus,
 } from "./core/index.js";
 import { runAutoBackupIfNeeded } from "./core/backups/backupsRouter.js";
+import { rateLimitMiddleware } from "./ratelimit/middleware.js";
 
-// Re-export the DO class so Wrangler can locate it via `main`.
+// Re-export the DO classes so Wrangler can locate them via `main`.
 export { RealtimeHub } from "./realtime/RealtimeHub.js";
+export { RateLimiter } from "./ratelimit/RateLimiter.js";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -36,30 +38,33 @@ app.use("*", async (c, next) => {
   c.header("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
 });
 
+// ── Rate limiting ─────────────────────────────────────────────────
+// Reads the `rateLimit` setting from _settings, matches request paths
+// against configured rules, and returns 429 when a per-IP limit is
+// exceeded. Runs before route handlers but after security headers.
+app.use("/api/*", rateLimitMiddleware);
+
 // ── Request logging ───────────────────────────────────────────────
-// Only requests against USER-CREATED collections are logged to `_logs`.
-// System/admin routes (/api/core/superusers, /api/core/settings,
-// /api/core/backups, /api/core/sql, the collections-metadata CRUD itself,
-// etc.) and internal underscore-prefixed tables (_settings, _superusers…)
-// are intentionally skipped to keep the log focused on actual data access.
-//
-// Concretely, a row is written when the path matches one of:
+// All API requests related to USER-CREATED collections are logged to
+// `_logs`. This includes:
 //   /api/core/collections/<name>/records/*   (admin records API)
+//   /api/core/collections/<name>             (collection metadata CRUD)
+//   /api/core/storage/*                      (file uploads / downloads)
+//   /api/core/import/*                       (bulk import)
+//   /api/core/export/*                       (bulk export)
 //   /api/collections/<name>/records/*        (public records API)
 //   /api/collections/<name>/auth/*           (collection auth API)
-// where <name> does NOT start with `_` (so internal tables are excluded).
 //
+// System-only routes (/api/core/superusers, /api/core/settings,
+// /api/core/backups, /api/core/logs, etc.) are NOT logged.
+// Underscore-prefixed collection names are treated as internal and excluded.
+//
+// Errors (4xx/5xx) capture the error message from the response body.
 // Trim+persist logic lives in `recordRequest`; the write runs via
 // `waitUntil` so the response is never blocked.
 app.use("/api/*", async (c, next) => {
-  // performance.now() gives sub-ms monotonic timing — Date.now() in the
-  // Workers runtime is deliberately coarsened to ~5ms to mitigate
-  // Spectre-class timing attacks, so every duration measured with it
-  // comes out suspiciously round (0, 5, 10, 15…).
+  // performance.now() gives sub-ms monotonic timing.
   const startPerf = performance.now();
-  // Capture the absolute timestamp at request START — not later inside
-  // the waitUntil callback, which fires after the response is already
-  // out the door and can lag by several milliseconds.
   const startedAt = Date.now();
   await next();
   const path = new URL(c.req.url).pathname;
@@ -67,11 +72,22 @@ app.use("/api/*", async (c, next) => {
   const status = c.res.status ?? 200;
   const durationMs = Math.round((performance.now() - startPerf) * 1000) / 1000;
 
-  // Identify who triggered the request. Auth middleware (requireAuth,
-  // optionalAuth, requireCollectionAuth) runs during `await next()` and
-  // sets context variables. We read them here — after next() returns —
-  // so the identity is available regardless of which router handled it.
+  // Identify who triggered the request.
   const requestBy = resolveRequestBy(c);
+
+  // Capture error message from failed responses.
+  let errorMsg: string | null = null;
+  if (status >= 400) {
+    try {
+      const clone = c.res.clone();
+      const body = await clone.json() as Record<string, unknown>;
+      errorMsg = (typeof body.detail === "string" ? body.detail : null)
+              || (typeof body.error === "string" ? body.error : null)
+              || null;
+    } catch {
+      // Body might not be JSON or already consumed.
+    }
+  }
 
   c.executionCtx.waitUntil(
     recordRequest(c.env, {
@@ -84,7 +100,7 @@ app.use("/api/*", async (c, next) => {
       requestBy,
       ip: c.req.header("CF-Connecting-IP") ?? c.req.header("X-Forwarded-For") ?? null,
       userAgent: c.req.header("User-Agent") ?? null,
-      error: null,
+      error: errorMsg,
     }),
   );
 });
@@ -128,19 +144,32 @@ function resolveRequestBy(c: Context): string {
 /**
  * Decide whether a request path should be logged to `_logs`.
  *
- * Returns true only for data-access routes on a user-created collection
- * (records CRUD on the admin or public API, and collection-auth flows).
- * Underscore-prefixed names (`_settings`, `_superusers`, …) are treated
- * as internal and excluded.
+ * Logs ALL API requests related to user-created collections:
+ *   - Records CRUD (admin + public)
+ *   - Collection auth flows
+ *   - Collection metadata operations (create/edit/delete/list)
+ *   - Storage uploads/downloads
+ *   - Bulk import/export
+ *
+ * System-only routes (superusers, settings, backups, logs, API tokens,
+ * realtime, SQL queries, install) are NOT logged.
  */
 function shouldLogPath(path: string): boolean {
   // Fast reject: must be under /api/.
   if (!path.startsWith("/api/")) return false;
 
   // Admin records API: /api/core/collections/<name>/records[/*]
-  const admin = path.match(/^\/api\/core\/collections\/([^/]+)\/records(?:\/|$)/);
-  if (admin) {
-    return !isAdminNamespace(admin[1]!);
+  const adminRecords = path.match(/^\/api\/core\/collections\/([^/]+)\/records(?:\/|$)/);
+  if (adminRecords) {
+    return !isAdminNamespace(adminRecords[1]!);
+  }
+
+  // Collection metadata: /api/core/collections or /api/core/collections/<name>
+  // (but NOT /api/core/collections/<name>/records — handled above)
+  if (/^\/api\/core\/collections(?:\/([^/]+))?(?:\/)?$/.test(path)) {
+    const m = path.match(/^\/api\/core\/collections\/([^/]+)$/);
+    if (m && isAdminNamespace(m[1]!)) return false;
+    return true;
   }
 
   // Public client API: /api/collections/<name>/records[/*] or /auth[/*]
@@ -148,6 +177,12 @@ function shouldLogPath(path: string): boolean {
   if (pub) {
     return !isAdminNamespace(pub[1]!);
   }
+
+  // Storage operations (file uploads/downloads related to collections)
+  if (/^\/api\/core\/storage(?:\/|$)/.test(path)) return true;
+
+  // Import / export (bulk data operations on collections)
+  if (/^\/api\/core\/(?:import|export)(?:\/|$)/.test(path)) return true;
 
   return false;
 }

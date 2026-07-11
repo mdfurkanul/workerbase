@@ -1,12 +1,12 @@
 import type { FieldType } from "@/lib/fieldTypes";
 import { uuid, type Field } from "@/components/fields";
 
-export function makeSystemFields(): Field[] {
+export function makeSystemFields(idType: "uuid" | "autoincrement" = "uuid"): Field[] {
   return [
     {
       cid: uuid(),
       name: "id",
-      type: "text",
+      type: idType === "autoincrement" ? "integer" : "text",
       required: true,
       unique: true,
       hidden: false,

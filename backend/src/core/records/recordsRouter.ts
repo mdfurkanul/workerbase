@@ -36,7 +36,7 @@ import {
   scopeSatisfies,
 } from "../../auth/apiToken.js";
 import { resolveApiToken, touchApiToken } from "../apiTokens/index.js";
-import { pickDynamicDefaults } from "../collections/validation.js";
+import { pickDynamicDefaults, coerceValue } from "../collections/validation.js";
 
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -46,6 +46,7 @@ interface CollectionMeta {
   name: string;
   type: CollectionType;
   schema: FieldDefinition[] | null;
+  idType: string;
   listRule: string | null;
   viewRule: string | null;
   createRule: string | null;
@@ -71,7 +72,7 @@ interface Principal {
 async function loadCollection(db: D1Database, name: string): Promise<CollectionMeta | null> {
   const row = await db
     .prepare(
-      `SELECT id, name, type, schema, list_rule, view_rule, create_rule, update_rule, delete_rule
+      `SELECT id, name, type, schema, id_type, list_rule, view_rule, create_rule, update_rule, delete_rule
          FROM _collections WHERE name = ?`,
     )
     .bind(name)
@@ -80,6 +81,7 @@ async function loadCollection(db: D1Database, name: string): Promise<CollectionM
       name: string;
       type: string;
       schema: string | null;
+      id_type: string | null;
       list_rule: string | null;
       view_rule: string | null;
       create_rule: string | null;
@@ -92,6 +94,7 @@ async function loadCollection(db: D1Database, name: string): Promise<CollectionM
     name: row.name,
     type: row.type as CollectionType,
     schema: row.schema ? (JSON.parse(row.schema) as FieldDefinition[]) : null,
+    idType: row.id_type ?? "uuid",
     listRule: row.list_rule,
     viewRule: row.view_rule,
     createRule: row.create_rule,
@@ -192,8 +195,12 @@ function filterWriteFields(
   for (const [k, v] of Object.entries(data)) {
     if (SYSTEM_COLUMNS.has(k)) continue;
     if (!IDENT.test(k)) continue;
-    if (!allowed.has(k)) continue;
-    out[k] = v;
+    const field = allowed.get(k);
+    if (!field) continue;
+    // Coerce into the storage form — D1 cannot bind objects/arrays for TEXT
+    // columns, so structured types (json/files/relation/select/geo) are
+    // JSON-stringified by coerceValue.
+    out[k] = coerceValue(field, v);
   }
   return out;
 }
@@ -338,11 +345,13 @@ recordsRouter.post("/:name/records", async (c) => {
   }
 
   const filtered = filterWriteFields(body, collection.schema);
-  const id = crypto.randomUUID();
+  const isAutoIncrement = collection.idType === "autoincrement";
+  const id = isAutoIncrement ? null : crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   // Auto-fill dynamic date defaults ($now / $nowOnUpdate). Client values win.
   const dynamicDefaults = pickDynamicDefaults(collection.schema, "insert", now);
-  const data: Record<string, unknown> = { ...dynamicDefaults, ...filtered, id, created_at: now, updated_at: now };
+  const data: Record<string, unknown> = { ...dynamicDefaults, ...filtered, created_at: now, updated_at: now };
+  if (id !== null) data.id = id;
 
   const cols = Object.keys(data);
   if (cols.length === 0) {
@@ -353,13 +362,15 @@ recordsRouter.post("/:name/records", async (c) => {
   const values = cols.map((k) => data[k]);
 
   try {
-    await c.env.SYSTEM_DB.prepare(
+    const insertResult = await c.env.SYSTEM_DB.prepare(
       `INSERT INTO "${name}" (${colNames}) VALUES (${placeholders})`,
     ).bind(...values).run();
 
+    // For autoincrement, retrieve the assigned ID from the insert result.
+    const rowId = isAutoIncrement ? insertResult.meta.last_row_id : id;
     const row = await c.env.SYSTEM_DB.prepare(
       `SELECT * FROM "${name}" WHERE id = ?`,
-    ).bind(id).first();
+    ).bind(rowId).first();
 
     return c.json({ record: row ? maskRow(row as Record<string, unknown>) : null }, 201);
   } catch (err) {

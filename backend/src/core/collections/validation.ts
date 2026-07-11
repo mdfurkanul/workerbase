@@ -228,8 +228,15 @@ function coerceAndCheck(field: FieldDefinition, v: unknown): string | null {
   }
 }
 
-/** Coerce a client value into the storage form for the given field type. */
-function coerceValue(field: FieldDefinition, v: unknown): unknown {
+/**
+ * Coerce a client value into the storage form for the given field type.
+ *
+ * Structured types (`json`, `files`, `relation`, `select`, `geo`) are stored
+ * as TEXT columns. D1 cannot bind objects or arrays — they must be serialised
+ * to a JSON string before reaching `prepare().bind(...)`. Strings pass through
+ * unchanged (we assume the caller already serialised, or intends literal TEXT).
+ */
+export function coerceValue(field: FieldDefinition, v: unknown): unknown {
   switch (field.type) {
     case "integer": {
       return typeof v === "number" ? v : parseInt(String(v), 10);
@@ -242,15 +249,15 @@ function coerceValue(field: FieldDefinition, v: unknown): unknown {
       if (v === "true" || v === 1 || v === "1") return 1;
       return 0;
     }
-    case "json": {
-      if (typeof v === "string") {
-        try {
-          return JSON.parse(v);
-        } catch {
-          return v;
-        }
-      }
-      return v;
+    case "json":
+    case "files":
+    case "relation":
+    case "select":
+    case "geo": {
+      // Stored as TEXT. Primitives pass through; objects/arrays are JSON-encoded.
+      if (v === null || v === undefined) return v;
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+      return JSON.stringify(v);
     }
     default:
       return v;

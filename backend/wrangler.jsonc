@@ -62,11 +62,13 @@
       ],
       "durable_objects": {
         "bindings": [
-          { "name": "REALTIME", "class_name": "RealtimeHub" }
+          { "name": "REALTIME", "class_name": "RealtimeHub" },
+          { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
         ]
       },
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
+        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
+        { "tag": "v2", "new_classes": ["RateLimiter"] }
       ],
       "triggers": {
         "crons": ["0 * * * *"]
@@ -90,11 +92,13 @@
       ],
       "durable_objects": {
         "bindings": [
-          { "name": "REALTIME", "class_name": "RealtimeHub" }
+          { "name": "REALTIME", "class_name": "RealtimeHub" },
+          { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
         ]
       },
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
+        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
+        { "tag": "v2", "new_classes": ["RateLimiter"] }
       ],
       "triggers": {
         "crons": ["0 * * * *"]
@@ -118,11 +122,13 @@
       ],
       "durable_objects": {
         "bindings": [
-          { "name": "REALTIME", "class_name": "RealtimeHub" }
+          { "name": "REALTIME", "class_name": "RealtimeHub" },
+          { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
         ]
       },
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }
+        { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
+        { "tag": "v2", "new_classes": ["RateLimiter"] }
       ],
       "triggers": {
         "crons": ["0 * * * *"]

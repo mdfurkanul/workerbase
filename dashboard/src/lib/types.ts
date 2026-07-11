@@ -35,6 +35,8 @@ export interface Collection {
   query?: string | null;
   list_rule?: string | null;
   create_rule?: string | null;
+  idType?: "uuid" | "autoincrement";
+  idStart?: number | null;
 }
 
 export interface CollectionsResponse {

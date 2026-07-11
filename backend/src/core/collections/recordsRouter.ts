@@ -85,9 +85,9 @@ recordsRouter.post("/:name/records", requireAuth, requireRole("admin", "editor")
   // Load the collection's stored schema (source of truth) so we can
   // validate the payload against it.
   const collectionRow = await c.env.SYSTEM_DB
-    .prepare(`SELECT type, schema FROM _collections WHERE name = ?`)
+    .prepare(`SELECT type, schema, id_type FROM _collections WHERE name = ?`)
     .bind(name)
-    .first<{ type: CollectionType; schema: string | null }>();
+    .first<{ type: CollectionType; schema: string | null; id_type: string | null }>();
   const schemaFields: FieldDefinition[] | null = collectionRow?.schema
     ? (JSON.parse(collectionRow.schema) as FieldDefinition[])
     : null;
@@ -130,12 +130,14 @@ recordsRouter.post("/:name/records", requireAuth, requireRole("admin", "editor")
     return c.json({ error: "validation_failed", fieldErrors }, 400);
   }
 
-  const id = crypto.randomUUID();
+  const isAutoIncrement = collectionRow?.id_type === "autoincrement";
+  const id = isAutoIncrement ? null : crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   // Auto-fill dynamic date defaults ($now / $nowOnUpdate) for any field
   // the client omitted. Client-supplied values win — they explicitly set it.
   const dynamicDefaults = pickDynamicDefaults(schemaFields, "insert", now);
-  const data: Record<string, unknown> = { ...dynamicDefaults, ...cleaned, id, created_at: now, updated_at: now };
+  const data: Record<string, unknown> = { ...dynamicDefaults, ...cleaned, created_at: now, updated_at: now };
+  if (id !== null) data.id = id;
 
   const cols = Object.keys(data);
   if (cols.length === 0) {
@@ -146,13 +148,15 @@ recordsRouter.post("/:name/records", requireAuth, requireRole("admin", "editor")
   const values = cols.map((k) => data[k]);
 
   try {
-    await c.env.SYSTEM_DB.prepare(
+    const insertResult = await c.env.SYSTEM_DB.prepare(
       `INSERT INTO "${name}" (${colNames}) VALUES (${placeholders})`,
     ).bind(...values).run();
 
+    // For autoincrement, retrieve the assigned ID from the insert result.
+    const rowId = isAutoIncrement ? insertResult.meta.last_row_id : id;
     const row = await c.env.SYSTEM_DB.prepare(
       `SELECT * FROM "${name}" WHERE id = ?`,
-    ).bind(id).first();
+    ).bind(rowId).first();
 
     return c.json({ record: row }, 201);
   } catch (err) {

@@ -8,6 +8,7 @@ import {
 } from "../../../src/core/records/recordsRouter.js";
 import {
   pickDynamicDefaults,
+  coerceValue,
   DEFAULT_NOW,
   DEFAULT_NOW_ON_UPDATE,
   isDynamicDateDefault,
@@ -132,6 +133,91 @@ describe("filterWriteFields", () => {
   it("does not require every schema field to be present", () => {
     const out = filterWriteFields({ title: "Hi" }, sampleFields);
     expect(out).toEqual({ title: "Hi" });
+  });
+
+  // Coercion — objects/arrays must be JSON-stringified for TEXT-stored
+  // columns so D1 doesn't reject with D1_TYPE_ERROR.
+  it("JSON-stringifies object values for json fields", () => {
+    const fields: FieldDefinition[] = [
+      { id: "j", name: "tags", type: "json", required: false, unique: false, hidden: false, options: {} },
+    ];
+    const out = filterWriteFields({ tags: { data: "custom" } }, fields);
+    expect(out).toEqual({ tags: '{"data":"custom"}' });
+  });
+
+  it("JSON-stringifies array values for files fields", () => {
+    const fields: FieldDefinition[] = [
+      { id: "f", name: "images", type: "files", required: false, unique: false, hidden: false, options: {} },
+    ];
+    const out = filterWriteFields({ images: ["a.png", "b.png"] }, fields);
+    expect(out).toEqual({ images: '["a.png","b.png"]' });
+  });
+});
+
+describe("coerceValue", () => {
+  const f = (type: string, name = "x"): FieldDefinition =>
+    ({ id: "id", name, type, required: false, unique: false, hidden: false, options: {} }) as FieldDefinition;
+
+  // 1. Happy path — json object → JSON string
+  it("stringifies objects for json type", () => {
+    expect(coerceValue(f("json"), { a: 1 })).toBe('{"a":1}');
+  });
+
+  // 2. Happy path — json array → JSON string
+  it("stringifies arrays for json type", () => {
+    expect(coerceValue(f("json"), [1, 2, 3])).toBe("[1,2,3]");
+  });
+
+  // 3. Strings pass through unchanged (already serialised)
+  it("passes strings through for json type", () => {
+    expect(coerceValue(f("json"), '{"a":1}')).toBe('{"a":1}');
+  });
+
+  // 4. files / relation / select / geo also stringify objects
+  it("stringifies arrays for files type", () => {
+    expect(coerceValue(f("files"), ["x", "y"])).toBe('["x","y"]');
+  });
+
+  it("stringifies objects for geo type", () => {
+    expect(coerceValue(f("geo"), { lat: 10, lng: 20 })).toBe('{"lat":10,"lng":20}');
+  });
+
+  it("passes string through for select type", () => {
+    expect(coerceValue(f("select"), "green")).toBe("green");
+  });
+
+  // 5. Primitives (number/boolean) pass through for structured types
+  it("passes primitives through for structured types", () => {
+    expect(coerceValue(f("json"), 42)).toBe(42);
+    expect(coerceValue(f("json"), true)).toBe(true);
+  });
+
+  // 6. Null/undefined pass through
+  it("passes null/undefined through for json type", () => {
+    expect(coerceValue(f("json"), null)).toBe(null);
+    expect(coerceValue(f("json"), undefined)).toBe(undefined);
+  });
+
+  // 7. integer coercion
+  it("coerces string to integer", () => {
+    expect(coerceValue(f("integer"), "42")).toBe(42);
+  });
+
+  // 8. real coercion
+  it("coerces string to real", () => {
+    expect(coerceValue(f("real"), "3.14")).toBe(3.14);
+  });
+
+  // 9. bool coercion
+  it("coerces boolean to 0/1", () => {
+    expect(coerceValue(f("bool"), true)).toBe(1);
+    expect(coerceValue(f("bool"), false)).toBe(0);
+    expect(coerceValue(f("bool"), "true")).toBe(1);
+  });
+
+  // 10. text passes through
+  it("passes text through unchanged", () => {
+    expect(coerceValue(f("text"), "hello")).toBe("hello");
   });
 });
 

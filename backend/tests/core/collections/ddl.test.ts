@@ -73,4 +73,22 @@ describe("renderColumnDef", () => {
     // Dynamic sentinel must still be skipped inside the table body.
     expect(sql.match(/DEFAULT/g) ?? []).toHaveLength(2); // created_at + updated_at only
   });
+
+  // 7. renderCreateTable with idType="autoincrement" uses INTEGER PRIMARY KEY AUTOINCREMENT
+  it("renderCreateTable renders INTEGER PRIMARY KEY AUTOINCREMENT for autoincrement", () => {
+    const sql = renderCreateTable(
+      "orders",
+      [{ name: "total", type: "real" }],
+      { idType: "autoincrement" },
+    );
+    expect(sql).toContain('"id" INTEGER PRIMARY KEY AUTOINCREMENT');
+    expect(sql).not.toContain('"id" TEXT PRIMARY KEY');
+  });
+
+  // 8. renderCreateTable defaults to UUID TEXT when no opts provided
+  it("renderCreateTable defaults to TEXT PRIMARY KEY without opts", () => {
+    const sql = renderCreateTable("items", [{ name: "name", type: "text" }]);
+    expect(sql).toContain('"id" TEXT PRIMARY KEY');
+    expect(sql).not.toContain("AUTOINCREMENT");
+  });
 });

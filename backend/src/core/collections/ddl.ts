@@ -143,15 +143,50 @@ export function renderColumnDef(field: { name: string; type: string; required?: 
   return parts.join(" ");
 }
 
-export function renderCreateTable(name: string, fields: { name: string; type: string; required?: boolean; unique?: boolean; default?: string | number | boolean | null }[]): string {
+/** ID column definitions per ID strategy. */
+export type IdType = "uuid" | "autoincrement";
+
+export function renderCreateTable(
+  name: string,
+  fields: { name: string; type: string; required?: boolean; unique?: boolean; default?: string | number | boolean | null }[],
+  opts: { idType?: IdType } = {},
+): string {
   assertIdentifier(name);
+  const idCol =
+    opts.idType === "autoincrement"
+      ? '"id" INTEGER PRIMARY KEY AUTOINCREMENT'
+      : '"id" TEXT PRIMARY KEY';
   const body = [
-    '"id" TEXT PRIMARY KEY',
+    idCol,
     ...fields.map(renderColumnDef),
     '"created_at" INTEGER NOT NULL DEFAULT (unixepoch())',
     '"updated_at" INTEGER NOT NULL DEFAULT (unixepoch())',
   ].join(", ");
   return `CREATE TABLE IF NOT EXISTS "${name}" (${body})`;
+}
+
+/**
+ * Seed the `sqlite_sequence` table so the next auto-increment ID starts at
+ * `start`. Must be called AFTER the table is created (AUTOINCREMENT creates
+ * `sqlite_sequence` automatically). Uses `INSERT OR REPLACE` so it works
+ * whether or not a row already exists for this table.
+ *
+ *   start=1  →  seq=0  →  first insert gets id=1
+ *   start=100 → seq=99  →  first insert gets id=100
+ */
+export async function seedAutoIncrement(
+  db: D1Database,
+  tableName: string,
+  start: number,
+): Promise<void> {
+  assertIdentifier(tableName);
+  if (!Number.isInteger(start) || start < 1) return;
+  await db
+    .prepare(
+      `INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)`,
+    )
+    .bind(tableName, start - 1)
+    .run();
 }
 
 export function renderCreateView(name: string, query: string): string {

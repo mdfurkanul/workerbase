@@ -249,6 +249,8 @@ File: `backend/src/core/collections/collectionsRouter.ts`
 | `schema` (fieldSchema[])                                          | ✅       | min 1 item; defines columns            |
 | `indexes` (`{ name, columns[], unique? }[]`)                     | ❌       |                                        |
 | `constraints` (`{ name?, columns[] }[]`)                         | ❌       |                                        |
+| `idType`                                                          | ❌       | `"uuid"` (default) \| `"autoincrement"` — controls the `id` column type |
+| `idStart`                                                         | ❌       | integer ≥ 1; seeds `sqlite_sequence` so the first record ID starts here (only when `idType="autoincrement"`) |
 | `listRule`, `viewRule`, `createRule`, `updateRule`, `deleteRule` | ❌       | strings (rule expressions; see §Auth)  |
 
 **`type=user`** — auth-enabled (gets auth columns auto-injected: `email`, `password_hash`, `password_salt`, `token_key`, `verified`)
@@ -257,6 +259,8 @@ File: `backend/src/core/collections/collectionsRouter.ts`
 |------------------------------------|----------|-----------------------------|
 | `schema` (fieldSchema[])           | ❌       |                             |
 | `indexes`, `constraints`           | ❌       |                             |
+| `idType`                           | ❌       | `"uuid"` (default) \| `"autoincrement"` |
+| `idStart`                          | ❌       | integer ≥ 1 (autoincrement only) |
 | `apiRules`                         | ❌       | overrides per-action rules  |
 | `authConfig` (record)              | ❌       | e.g. `{ minPasswordLength }`|
 | `emailTemplates` (record)          | ❌       |                             |
@@ -284,14 +288,14 @@ These sentinels are **not** rendered into the SQL `DEFAULT` clause (SQLite canno
 
 ### `GET /api/core/collections`
 - **Auth:** Superuser JWT (any role)
-- **Response 200:** `{ collections: [{ id, name, type, source, schema, count }] }`
+- **Response 200:** `{ collections: [{ id, name, type, source, schema, idType, idStart, count }] }`
 
 > The returned `schema` always includes the auto-managed system columns (`id`, `created_at`, `updated_at`) for `base`/`user` collections, prepended to the user-defined fields. They are filtered out of the stored `_collections.schema` JSON at create time (they're added by DDL) and re-merged on read so the dashboard sees the full table shape.
 
 ### `GET /api/core/collections/:name`
 - **Auth:** Superuser JWT (any role)
 - **Path:** `name` (collection name or `_underscore` system table)
-- **Response 200:** `{ collection: { id, name, type, source, schema, count } }`
+- **Response 200:** `{ collection: { id, name, type, source, schema, idType, idStart, count } }`
 
 > Same system-column merge applies to the single-collection response.
 
@@ -299,6 +303,7 @@ These sentinels are **not** rendered into the SQL `DEFAULT` clause (SQLite canno
 - **Auth:** Superuser JWT — **admin only**
 - **Path:** `name`
 - **Body:** Same shape as POST but all top-level fields optional (per `type`). Schema changes trigger migration via `diffSchema()` + `applyMigration()`.
+- **ID type change:** If `idType` is provided and differs from the current type, the backend drops + recreates the physical table with the new `id` column DDL. This is **refused** (409 `id_type_change_requires_empty_table`) when the table has any records. The `idStart` value can be adjusted independently for autoincrement collections at any time (updates `sqlite_sequence`).
 - **Renaming:** If the optional top-level `name` field differs from the path `:name`, the backend runs `ALTER TABLE "old" RENAME TO "new"` (or `DROP VIEW` + `CREATE VIEW` for `type=view`) and updates `_collections.name`. The rename is **refused** (409) when:
   - the target name already exists in `_collections` (`rename_target_exists`)
   - another collection has a `relation` field with `options.targetCollection === oldName`
@@ -306,7 +311,7 @@ These sentinels are **not** rendered into the SQL `DEFAULT` clause (SQLite canno
 
   The handler never rewrites view queries or relation targets automatically — those must be updated first so the operation stays predictable.
 - **Response 200:** `{ id, name, renamedFrom?, type, updated_at, migrations: { applied, errors } }` (`renamedFrom` present only when a rename occurred)
-- **Response 409:** `{ error: "rename_target_exists" | "rename_blocked_by_references", target?, referencedBy?, hint? }`
+- **Response 409:** `{ error: "rename_target_exists" | "rename_blocked_by_references" | "id_type_change_requires_empty_table", target?, referencedBy?, hint?, detail? }`
 
 ### `DELETE /api/core/collections/:name`
 - **Auth:** Superuser JWT — **admin only** (blocks system tables)
@@ -659,6 +664,31 @@ A backup captures every `table`, `view`, `index`, and `trigger` from `sqlite_mas
 
 Every API request (`/api/*`) is logged to the `_logs` table by a request-logging middleware in `src/index.ts`. Writes happen in the background via `c.executionCtx.waitUntil(...)` so they never block the response. Level is derived from the response status (`info` < 400, `warn` 400–499, `error` ≥ 500). Retention is capped at 5,000 rows (auto-trimmed after each insert).
 
+### `GET /api/core/logs/timeseries`
+- **Auth:** Superuser JWT (any role)
+- **Query:**
+
+| Param  | Type | Default | Notes                          |
+|--------|------|---------|--------------------------------|
+| `range`| enum | `7d`    | `7d` (daily) or `24h` (hourly) |
+
+- **Purpose:** Aggregates request counts + duration stats into time buckets for the logs dashboard bar chart. Gaps are filled with zeros.
+- **Response 200:**
+```json
+{
+  "range": "7d",
+  "buckets": [
+    { "label": "Mon", "count": 120, "avgDuration": 45, "maxDuration": 200 }
+  ]
+}
+```
+For `range=24h`, labels are hour strings like `"14:00"`.
+
+### `GET /api/core/logs/summary`
+- **Auth:** Superuser JWT (any role)
+- **Purpose:** Returns aggregate counts per log level for the bar chart on the logs dashboard.
+- **Response 200:** `{ total: number, info: number, warn: number, error: number }`
+
 ### `GET /api/core/logs`
 - **Auth:** Superuser JWT (any role)
 - **Query:**
@@ -702,6 +732,7 @@ System-wide key/value store backed by the `_settings` table (one row per key, JS
 - **Purpose:** Returns the full settings blob. Known keys include:
   - `installed` — install-flow sentinel (read-only; cannot be PATCHed)
   - `appName`, `appUrl`, `accentColor`, `batchApi`, `rateLimit` — application basics
+  - **`rateLimit`** — `{ enabled: boolean, rules: RateLimitRule[] }` where each rule is `{ id, label, maxRequests, interval, target }`. When enabled, the rate limit middleware checks each `/api/*` request against the rules and returns `429` if a per-IP limit is exceeded. Rule labels support patterns: `*.auth` (path contains keyword), `*.create` (POST to /records or /create), `/api/` (prefix), `/` (catch-all). Response 429: `{ error: "rate_limited", detail, retryAfter }` with `Retry-After` header.
   - `senderName`, `senderEmail`, `smtpHost`, `smtpPort`, `smtpUser`, `smtpPassword`, `smtpSecure` — mail/SMTP
   - `backups` — `{ autoEnabled, intervalHours, maxRetention, lastAutoAt }`
   - **`timezone`** — IANA zone (e.g. `"America/New_York"`); empty/undefined means "browser default". Drives every dashboard timestamp via `Intl.DateTimeFormat`.

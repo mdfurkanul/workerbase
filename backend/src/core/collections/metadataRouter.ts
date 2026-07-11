@@ -23,6 +23,7 @@ import {
   isSafeSelectQuery,
   renderCreateTable,
   renderCreateView,
+  seedAutoIncrement,
   validateViewQuery,
 } from "./ddl.js";
 import {
@@ -167,6 +168,12 @@ async function resolveLiveSchema(
   // added directly in SQL, or freshly-injected auth columns) are appended
   // at the end so they remain visible without disturbing the user's
   // intended field order.
+  //
+  // SYSTEM COLUMN POSITIONS: `id` is always first, `created_at` and
+  // `updated_at` are always last — regardless of where they appear in
+  // the stored schema or PRAGMA. This matches the physical DDL layout
+  // (`renderCreateTable` emits id → user fields → created_at → updated_at)
+  // and keeps the dashboard's field editor predictable.
   const pragmaNames = new Set(pragmaCols.map((c) => c.name));
   const storedByName = new Map(stored.map((f) => [f.name, f]));
 
@@ -188,7 +195,13 @@ async function resolveLiveSchema(
     }
   }
 
-  return ordered;
+  // Enforce system column positions: id first, created_at/updated_at last.
+  const SYSTEM_FIRST = new Set(["id"]);
+  const SYSTEM_LAST = new Set(["created_at", "updated_at"]);
+  const first = ordered.filter((f) => SYSTEM_FIRST.has(f.name));
+  const middle = ordered.filter((f) => !SYSTEM_FIRST.has(f.name) && !SYSTEM_LAST.has(f.name));
+  const last = ordered.filter((f) => SYSTEM_LAST.has(f.name));
+  return [...first, ...middle, ...last];
 }
 
 /** Escape a literal string for safe embedding inside a RegExp constructor. */
@@ -319,7 +332,9 @@ metadataRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
         default: f.default,
       })),
     );
-    ddl = renderCreateTable(spec.name, allFields);
+    ddl = renderCreateTable(spec.name, allFields, {
+      idType: "idType" in spec && spec.idType ? spec.idType : "uuid",
+    });
   }
 
   // 1. Issue DDL FIRST. This way a failure (e.g. duplicate column) leaves
@@ -330,6 +345,17 @@ metadataRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: "ddl_failed", detail: msg, ddl }, 500);
+  }
+
+  // 1b. Seed the auto-increment sequence if a start value was provided.
+  const idType = "idType" in spec && spec.idType ? spec.idType : "uuid";
+  const idStart = "idStart" in spec && typeof spec.idStart === "number" ? spec.idStart : null;
+  if (spec.type !== "view" && idType === "autoincrement" && idStart !== null && idStart > 1) {
+    try {
+      await seedAutoIncrement(c.env.SYSTEM_DB, spec.name, idStart);
+    } catch (err) {
+      // Non-fatal — the table works, just starts from 1.
+    }
   }
 
   // 2. Persist metadata (only after DDL succeeded).
@@ -345,8 +371,8 @@ metadataRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
       `INSERT INTO _collections
         (id, name, type, schema, query, indexes, constraints,
          list_rule, view_rule, create_rule, update_rule, delete_rule,
-         auth_config, email_templates, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         auth_config, email_templates, id_type, id_start, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id, spec.name, spec.type, schemaJson, queryVal,
       indexesJson, constraintsJson,
@@ -356,6 +382,7 @@ metadataRouter.post("/", requireAuth, requireRole("admin"), async (c) => {
       ("updateRule" in spec ? spec.updateRule : null) ?? null,
       ("deleteRule" in spec ? spec.deleteRule : null) ?? null,
       authConfigJson, emailTemplatesJson,
+      idType, idStart,
       now, now,
     ).run();
   } catch (err) {
@@ -427,11 +454,11 @@ metadataRouter.get("/", requireAuth, async (c) => {
   // distinguish base / user / view collections (PRAGMA alone can't tell
   // us this — it only returns column names + raw SQL types).
   const metaRows = await c.env.SYSTEM_DB.prepare(
-    `SELECT name, type, schema, query FROM _collections`,
-  ).all<{ name: string; type: string; schema: string | null; query: string | null }>();
+    `SELECT name, type, schema, query, id_type, id_start FROM _collections`,
+  ).all<{ name: string; type: string; schema: string | null; query: string | null; id_type: string | null; id_start: number | null }>();
   const metaByName = new Map<
     string,
-    { type: string; schema: FieldDefinition[] | null; query: string | null }
+    { type: string; schema: FieldDefinition[] | null; query: string | null; idType: string; idStart: number | null }
   >(
     (metaRows.results ?? []).map((r) => [
       r.name,
@@ -439,6 +466,8 @@ metadataRouter.get("/", requireAuth, async (c) => {
         type: r.type as CollectionType,
         schema: r.schema ? (JSON.parse(r.schema) as FieldDefinition[]) : null,
         query: r.query,
+        idType: r.id_type ?? "uuid",
+        idStart: r.id_start,
       },
     ]),
   );
@@ -466,6 +495,8 @@ metadataRouter.get("/", requireAuth, async (c) => {
           source,
           schema,
           query: declaredType === "view" ? (meta?.query ?? null) : null,
+          idType: meta?.idType ?? "uuid",
+          idStart: meta?.idStart ?? null,
           count: 0,
         };
       }),
@@ -498,9 +529,9 @@ metadataRouter.get("/:name", requireAuth, async (c) => {
 
   // Look up declared type + stored schema (source of truth).
   const meta = await db
-    .prepare(`SELECT type, schema, query FROM _collections WHERE name = ?`)
+    .prepare(`SELECT type, schema, query, id_type, id_start FROM _collections WHERE name = ?`)
     .bind(name)
-    .first<{ type: string; schema: string | null; query: string | null }>();
+    .first<{ type: string; schema: string | null; query: string | null; id_type: string | null; id_start: number | null }>();
   const declaredType = meta
     ? (meta.type as CollectionType)
     : source === "system"
@@ -526,6 +557,8 @@ metadataRouter.get("/:name", requireAuth, async (c) => {
       source,
       schema,
       query: declaredType === "view" ? (meta?.query ?? null) : null,
+      idType: meta?.id_type ?? "uuid",
+      idStart: meta?.id_start ?? null,
       count: 0,
     },
   });
@@ -606,7 +639,7 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
   const existing = await c.env.SYSTEM_DB.prepare(
     `SELECT id, type, schema, query, indexes, constraints,
             list_rule, view_rule, create_rule, update_rule, delete_rule,
-            auth_config, email_templates
+            auth_config, email_templates, id_type, id_start
        FROM _collections WHERE name = ?`,
   ).bind(name).first<{
     id: string;
@@ -622,6 +655,8 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
     delete_rule: string | null;
     auth_config: string | null;
     email_templates: string | null;
+    id_type: string | null;
+    id_start: number | null;
   }>();
   if (!existing) return c.json({ error: "not_found" }, 404);
 
@@ -736,6 +771,59 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
     }
   }
 
+  // ── ID type change (base/user only) ──────────────────────────────
+  // Changing the ID type requires recreating the physical table (SQLite
+  // can't ALTER a column type). We only allow this when the table is
+  // empty to avoid data loss. The "starting from" value can be adjusted
+  // independently for autoincrement tables via sqlite_sequence.
+  const currentIdType = existing.id_type ?? "uuid";
+  const requestedIdType = "idType" in spec && spec.idType ? spec.idType : undefined;
+  const requestedIdStart = "idStart" in spec && typeof spec.idStart === "number" ? spec.idStart : undefined;
+
+  if (existing.type !== "view" && requestedIdType && requestedIdType !== currentIdType) {
+    // Check row count — refuse if the table has data.
+    const countRow = await c.env.SYSTEM_DB
+      .prepare(`SELECT COUNT(*) as cnt FROM "${effectiveName}"`)
+      .first<{ cnt: number }>();
+    if ((countRow?.cnt ?? 0) > 0) {
+      return c.json(
+        { error: "id_type_change_requires_empty_table", detail: "Clear all records before changing the ID type." },
+        409,
+      );
+    }
+    // Recreate the table with the new ID column type.
+    try {
+      await c.env.SYSTEM_DB.exec(`DROP TABLE IF EXISTS "${effectiveName}"`);
+      const storedFields: FieldDefinition[] = existing.schema
+        ? (JSON.parse(existing.schema) as FieldDefinition[])
+        : [];
+      // Rebuild the DDL fields from stored schema (auth columns already included).
+      const ddlFields = storedFields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        required: f.required,
+        unique: f.unique,
+        default: f.default,
+      }));
+      const newDdl = renderCreateTable(effectiveName, ddlFields, { idType: requestedIdType });
+      await c.env.SYSTEM_DB.exec(newDdl);
+      // Seed autoincrement if requested.
+      if (requestedIdType === "autoincrement" && requestedIdStart !== undefined && requestedIdStart > 1) {
+        await seedAutoIncrement(c.env.SYSTEM_DB, effectiveName, requestedIdStart);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "id_type_change_failed", detail: msg }, 500);
+    }
+  } else if (existing.type !== "view" && currentIdType === "autoincrement" && requestedIdStart !== undefined) {
+    // Adjust the starting position on an existing autoincrement table.
+    try {
+      await seedAutoIncrement(c.env.SYSTEM_DB, effectiveName, requestedIdStart);
+    } catch {
+      // Non-fatal — the table still works, just may not have the desired start.
+    }
+  }
+
   // Persist updated metadata.
   const now = Date.now();
   const schemaJson =
@@ -758,12 +846,14 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
     "emailTemplates" in spec && spec.emailTemplates
       ? JSON.stringify(spec.emailTemplates)
       : existing.email_templates;
+  const idTypeVal = requestedIdType ?? currentIdType;
+  const idStartVal = requestedIdStart !== undefined ? requestedIdStart : (existing.id_start ?? null);
 
   await c.env.SYSTEM_DB.prepare(
     `UPDATE _collections
         SET ${renamedTo ? `name = ?, ` : ""}schema = ?, query = ?, indexes = ?, constraints = ?,
             list_rule = ?, view_rule = ?, create_rule = ?, update_rule = ?, delete_rule = ?,
-            auth_config = ?, email_templates = ?, updated_at = ?
+            auth_config = ?, email_templates = ?, id_type = ?, id_start = ?, updated_at = ?
       WHERE id = ?`,
   ).bind(
     ...(renamedTo ? [renamedTo] : []),
@@ -778,6 +868,8 @@ metadataRouter.patch("/:name", requireAuth, requireRole("admin"), async (c) => {
     ("deleteRule" in spec ? spec.deleteRule : undefined) ?? existing.delete_rule,
     authConfigJson,
     emailTemplatesJson,
+    idTypeVal,
+    idStartVal,
     now,
     existing.id,
   ).run();

@@ -40,6 +40,8 @@ function normalizeCollection(raw: Record<string, unknown>): Collection {
     query: (raw.query ?? null) as string | null,
     list_rule: (raw.list_rule ?? null) as string | null,
     create_rule: (raw.create_rule ?? null) as string | null,
+    idType: (raw.idType ?? raw.id_type ?? "uuid") as Collection["idType"],
+    idStart: (raw.idStart ?? raw.id_start ?? null) as Collection["idStart"],
   };
 }
 

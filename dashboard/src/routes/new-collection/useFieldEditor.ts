@@ -52,7 +52,18 @@ export function useFieldEditor(opts: {
     setType(next);
     setFields((arr) => {
       const withoutAuth = arr.filter((f) => !f.authField);
-      if (next === "user") return [...withoutAuth, ...makeAuthFields()];
+      if (next === "user") {
+        // Insert auth fields before the trailing auto fields (created/updated)
+        // so they sit in the middle — after `id`, before `created`/`updated`.
+        let insertAt = withoutAuth.length;
+        for (let i = withoutAuth.length - 1; i >= 0; i--) {
+          if (withoutAuth[i]!.auto) insertAt = i;
+          else break;
+        }
+        const result = [...withoutAuth];
+        result.splice(insertAt, 0, ...makeAuthFields());
+        return result;
+      }
       return withoutAuth;
     });
   }
