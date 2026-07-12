@@ -9,7 +9,7 @@
  *   GET    /api/core/storage/object   — streams the bytes back for a `?key=`
  */
 
-import { apiClient } from "./api-client";
+import { apiClient, getApiBase } from "./api-client";
 
 /** Shape returned by POST /api/core/storage/upload. */
 export interface UploadedFile {
@@ -36,11 +36,11 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
 /**
  * Build a URL that streams the object back via GET /api/core/storage/object.
  *
- * The path is same-origin by default; pass `VITE_API_BASE_URL` to point at
- * a remote Worker dev URL.
+ * Uses the same base-URL resolution as `apiClient` (localStorage → Vite env
+ * → same-origin) so file downloads follow the /setup-configured backend.
  */
 export function objectUrl(key: string): string {
-  const base = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
+  const base = getApiBase();
   const prefix = base.endsWith("/") || key.startsWith("/") ? "" : "/";
   return `${base}${prefix}/api/core/storage/object?key=${encodeURIComponent(key)}`;
 }

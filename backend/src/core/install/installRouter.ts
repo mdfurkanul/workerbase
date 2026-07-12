@@ -5,6 +5,8 @@ import {
   hashPassword,
   signToken,
 } from "../../auth/crypto.js";
+import { DEFAULT_BACKUPS_SETTINGS } from "../backups/backupsRouter.js";
+import { DEFAULT_LOGS_SETTINGS } from "../logs/logsRouter.js";
 
 /**
  * Installation router — first-run setup flow.
@@ -20,14 +22,43 @@ import {
 export const installRouter = new Hono<{ Bindings: Env }>();
 
 // ─────────────────────────────────────────────────────────────
-//  Default settings seeded on install. Keep keys flat & JSON-safe.
+//  Default settings seeded on install.
+//
+//  Every feature that reads from `_settings` MUST have a default
+//  listed here, so a fresh install doesn't 500 because of a missing
+//  key. The seeder uses INSERT ... ON CONFLICT DO NOTHING — existing
+//  values are never clobbered, which makes `/install/seed` safe to
+//  re-run after upgrades to backfill newly-introduced defaults.
 // ─────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: Record<string, unknown> = {
   installed: false,
-  brandColor: "#F38020", // Cloudflare orange
+  // Application basics
   appName: "WorkerBase",
+  appUrl: "",
+  brandColor: "#F38020", // Cloudflare orange
+  accentColor: "#F38020",
+  batchApi: true,
+  ipProxy: false,
+  superIps: false,
+  hideControls: false,
   storageQuotaMB: 1024,
+  // Split-Worker deployment wiring (empty = use env vars DASHBOARD_URL /
+  // CORS_ORIGINS). When set in _settings, these take precedence over env.
+  deploy: { dashboardUrl: "", corsOrigins: "" },
+  // Date / time preferences (empty timezone = browser default)
+  timezone: "",
+  dateTimeFormat: "iso8601",
+  customDateTimePattern: "",
+  // Mail (sender defaults — empty until the user configures SMTP)
+  mail: { fromAddress: "", fromName: "" },
+  // Storage upload rules
+  storage: { maxFileSizeMB: 50, allowedTypes: ["image/*", "application/pdf"] },
+  // Rate limiting (off by default until the user opts in)
+  rateLimit: { enabled: false, rules: [] },
+  // Feature-specific retention / scheduling
+  backups: { ...DEFAULT_BACKUPS_SETTINGS },
+  logs: { ...DEFAULT_LOGS_SETTINGS },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -53,11 +84,15 @@ async function isInstalled(db: D1Database): Promise<boolean> {
 
 async function seedDefaultSettings(db: D1Database): Promise<void> {
   const now = Date.now();
+  // INSERT ... ON CONFLICT DO NOTHING — only fills gaps, never clobbers
+  // existing user-configured values. This makes /install/seed safe to
+  // re-run after upgrades: new defaults are backfilled, customizations
+  // are preserved.
   const stmts = Object.entries(DEFAULT_SETTINGS).map(([key, value]) =>
     db
       .prepare(
         `INSERT INTO _settings (key, value, updated_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+         ON CONFLICT(key) DO NOTHING`,
       )
       .bind(key, JSON.stringify(value), now),
   );

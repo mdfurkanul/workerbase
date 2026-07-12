@@ -97,16 +97,53 @@ describe("POST /api/core/install — payload validation", () => {
 });
 
 describe("DEFAULT_SETTINGS", () => {
+  // 1. installed flag defaults to false
   it("contains the installed flag defaulting to false", () => {
     expect(DEFAULT_SETTINGS.installed).toBe(false);
   });
 
+  // 2. brand color is Cloudflare orange
   it("uses Cloudflare orange as the default brand color", () => {
     expect(DEFAULT_SETTINGS.brandColor).toBe("#F38020");
   });
 
+  // 3. storage quota is a positive number
   it("exposes a storage quota", () => {
     expect(typeof DEFAULT_SETTINGS.storageQuotaMB).toBe("number");
     expect(DEFAULT_SETTINGS.storageQuotaMB).toBeGreaterThan(0);
+  });
+
+  // 4. Every feature that reads from _settings must have a default so
+  //    a fresh install doesn't 500 on a missing key.
+  it("ships defaults for every feature settings blob", () => {
+    const required = ["backups", "logs", "mail", "storage", "rateLimit"];
+    for (const key of required) {
+      expect(DEFAULT_SETTINGS, `missing default for "${key}"`).toHaveProperty(key);
+      expect(DEFAULT_SETTINGS[key]).toBeDefined();
+    }
+  });
+
+  // 5. backups + logs defaults match the canonical feature defaults
+  it("seeds backups and logs defaults that match the feature modules", async () => {
+    const { DEFAULT_BACKUPS_SETTINGS } = await import(
+      "../../../src/core/backups/backupsRouter.js"
+    );
+    const { DEFAULT_LOGS_SETTINGS } = await import(
+      "../../../src/core/logs/logsRouter.js"
+    );
+    expect(DEFAULT_SETTINGS.backups).toEqual(DEFAULT_BACKUPS_SETTINGS);
+    expect(DEFAULT_SETTINGS.logs).toEqual(DEFAULT_LOGS_SETTINGS);
+  });
+
+  // 6. Edge case — date/time defaults are valid enum values
+  it("uses valid date/time format defaults", () => {
+    expect(typeof DEFAULT_SETTINGS.timezone).toBe("string");
+    expect(DEFAULT_SETTINGS.dateTimeFormat).toBe("iso8601");
+  });
+
+  // 7. Edge case — appName is a non-empty string
+  it("provides a non-empty default appName", () => {
+    expect(typeof DEFAULT_SETTINGS.appName).toBe("string");
+    expect((DEFAULT_SETTINGS.appName as string).length).toBeGreaterThan(0);
   });
 });

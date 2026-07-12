@@ -1,1 +1,9 @@
-export { logsRouter, levelFromStatus, recordRequest, LOG_RETENTION_LIMIT } from "./logsRouter.js";
+export {
+  logsRouter,
+  levelFromStatus,
+  recordRequest,
+  readLogsSettings,
+  DEFAULT_LOGS_SETTINGS,
+  LOGS_SETTINGS_KEY,
+  type LogsSettings,
+} from "./logsRouter.js";

@@ -8,7 +8,7 @@ import SelectionBar from "@/components/SelectionBar";
 import Modal from "@/components/Modal";
 import { useAuth, canEdit } from "@/hooks/useAuth";
 import { type Record as Row, type Collection, type CollectionField } from "@/lib/types";
-import { apiClient, getToken } from "@/lib/api-client";
+import { apiClient, getToken, getApiBase } from "@/lib/api-client";
 import { collectionAllowsRecordEdits } from "./helpers";
 
 /* ─── Records sub-view ─────────────────────────────────────────────── */
@@ -109,7 +109,7 @@ export function RecordsTable({
     setDownloadingId(id);
     try {
       const token = getToken();
-      const base = import.meta.env.VITE_API_BASE_URL ?? "";
+      const base = getApiBase();
       const res = await fetch(
         `${base}/api/core/backups/${encodeURIComponent(id)}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : undefined },

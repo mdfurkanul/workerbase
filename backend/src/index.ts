@@ -21,12 +21,21 @@ import {
 } from "./core/index.js";
 import { runAutoBackupIfNeeded } from "./core/backups/backupsRouter.js";
 import { rateLimitMiddleware } from "./ratelimit/middleware.js";
+import { corsMiddleware } from "./middleware/cors.js";
+import { resolveDashboardUrl } from "./core/settings/deploymentSettings.js";
 
 // Re-export the DO classes so Wrangler can locate them via `main`.
 export { RealtimeHub } from "./realtime/RealtimeHub.js";
 export { RateLimiter } from "./ratelimit/RateLimiter.js";
 
 const app = new Hono<{ Bindings: Env }>();
+
+// ── CORS ─────────────────────────────────────────────────────────
+// Sits first so preflight OPTIONS short-circuits before rate-limit /
+// logging / auth middlewares. Reads allowed origins from CORS_ORIGINS
+// (falls back to DASHBOARD_URL). Same-origin requests pass through
+// untouched — no CORS headers emitted.
+app.use("*", corsMiddleware);
 
 // ── Security headers ──────────────────────────────────────────────
 app.use("*", async (c, next) => {
@@ -240,16 +249,21 @@ app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
 // In local dev the dashboard runs on the Vite dev server, not the Worker
 // (serveStatic can't resolve __STATIC_CONTENT_MANIFEST under wrangler dev).
-// When DASHBOARD_URL is set, redirect any non-API GET request (e.g. email
-// magic-link / reset-password landing URLs) to the same path on the Vite
-// server. Skips non-GET and API requests.
+// When a dashboard URL is configured (via _settings.deploy.dashboardUrl or
+// DASHBOARD_URL env var), redirect any non-API GET request (e.g. email
+// magic-link / reset-password landing URLs) to the same path on the
+// dashboard. Skips non-GET and API requests.
 app.get("/*", async (c, next) => {
-  const dashboardURL = c.env.DASHBOARD_URL?.replace(/\/$/, "");
+  const reqURL = new URL(c.req.url);
+  const dashboardURL = await resolveDashboardUrl(
+    c.env.SYSTEM_DB,
+    c.env,
+    "", // empty origin → fall through to next() when nothing configured
+  );
   if (!dashboardURL) {
     await next();
     return;
   }
-  const reqURL = new URL(c.req.url);
   const target = `${dashboardURL}${reqURL.pathname}${reqURL.search}`;
   return c.redirect(target, 302);
 });

@@ -2,17 +2,56 @@
  * Typed fetch wrapper for the WorkerBase API.
  *
  * - Attaches `Authorization: Bearer <token>` from localStorage on every request.
- * - Base URL defaults to same-origin ("") but can be overridden via
- *   `VITE_API_BASE_URL` for development against a remote Worker.
+ * - Base URL resolution order:
+ *     1. `workerbase.apiBase` in localStorage (runtime, set via /setup page)
+ *     2. `VITE_API_BASE_URL` (baked in at build time)
+ *     3. empty string → same-origin (single-Worker mode)
+ *   Resolving at request time (not module load) means the /setup page can
+ *   re-point the dashboard at a different backend without a reload.
  * - Exposes `get`, `post`, `put`, `patch`, `del` helpers that return typed JSON.
  * - Throws `ApiError` (with `{ status, message, detail }`) on non-2xx responses.
  * - On HTTP 401 the stored token is cleared and the user is redirected to /login.
  */
 
 const TOKEN_KEY = "workerbase.token";
+const API_BASE_KEY = "workerbase.apiBase";
 
-/** Read the Vite env var at module load; falls back to same-origin. */
-const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "";
+/**
+ * Resolve the API base URL for the next request. localStorage wins so the
+ * /setup page can override at runtime; the build-time Vite env var is the
+ * default; empty means same-origin (the common single-Worker case).
+ */
+export function getApiBase(): string {
+  try {
+    const stored = localStorage.getItem(API_BASE_KEY);
+    if (stored && stored.trim()) return stored.replace(/\/+$/, "");
+  } catch {
+    /* localStorage may be disabled (private mode) — fall through */
+  }
+  return (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
+}
+
+/**
+ * Persist a runtime API base URL. Called from the /setup page after the
+ * user confirms the backend is reachable. Pass an empty string to clear
+ * the override and fall back to same-origin.
+ */
+export function setApiBase(url: string): void {
+  try {
+    if (url && url.trim()) {
+      localStorage.setItem(API_BASE_KEY, url.trim().replace(/\/+$/, ""));
+    } else {
+      localStorage.removeItem(API_BASE_KEY);
+    }
+  } catch {
+    /* ignore quota / privacy-mode errors */
+  }
+}
+
+/** True when an explicit (non-same-origin) API base is configured. */
+export function hasApiBase(): boolean {
+  return getApiBase().length > 0;
+}
 
 /** Error thrown for any non-2xx API response. */
 export class ApiError extends Error {
@@ -62,7 +101,7 @@ export function clearToken(): void {
 
 /** Build an absolute or relative URL from the base + path + query. */
 function buildUrl(path: string, query?: Record<string, unknown>): string {
-  const prefix = BASE_URL;
+  const prefix = getApiBase();
   const slash = prefix.endsWith("/") || path.startsWith("/") ? "" : "/";
   const base = `${prefix}${slash}${path}`;
 

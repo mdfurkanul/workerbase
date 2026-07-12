@@ -92,7 +92,12 @@
     // ── Pre-production ──
     "preprod": {
       "name": "workerbase-preprod",
-      "vars": { "ENVIRONMENT": "preprod" },
+      "vars": {
+        "ENVIRONMENT": "preprod",
+        // Set to the dashboard origin(s) for split-Worker deploys.
+        // Same-origin requests pass through untouched when unset.
+        "CORS_ORIGINS": ""
+      },
       "d1_databases": [
         {
           "binding": "SYSTEM_DB",
@@ -125,7 +130,12 @@
     // ── Production ──
     "prod": {
       "name": "workerbase-prod",
-      "vars": { "ENVIRONMENT": "prod" },
+      "vars": {
+        "ENVIRONMENT": "prod",
+        // Set to the dashboard origin(s) for split-Worker deploys.
+        // Same-origin requests pass through untouched when unset.
+        "CORS_ORIGINS": ""
+      },
       "d1_databases": [
         {
           "binding": "SYSTEM_DB",

@@ -2,8 +2,10 @@
  * Logs router — mounted at /api/core/logs
  *
  * Endpoints:
- *   GET /          — paginated list of recent request log entries
- *   DELETE /       — bulk clear (admin only)
+ *   GET  /          — paginated list of recent request log entries
+ *   DELETE /        — bulk clear (admin only)
+ *   GET  /settings  — read retention settings
+ *   PATCH /settings — update retention settings (admin only)
  *
  * The `_logs` table is populated by the request-logging middleware in
  * `src/index.ts` (one row per request, written via `waitUntil` so the
@@ -18,6 +20,60 @@ import { requireAuth, requireRole } from "../../auth/middleware.js";
 export const logsRouter = new Hono<{ Bindings: Env }>();
 
 const LEVELS = new Set<LogLevel>(["info", "warn", "error"]);
+
+/* ─── Settings ─────────────────────────────────────────────────── */
+
+export const LOGS_SETTINGS_KEY = "logs";
+
+export interface LogsSettings {
+  /** Max rows to keep in `_logs`. 0 = unlimited. */
+  retentionLimit: number;
+  /** Max age in days. 0 = no time-based pruning. */
+  retentionDays: number;
+  /** Epoch-ms of the last time-based pruning pass (info only). */
+  lastPrunedAt: number | null;
+}
+
+export const DEFAULT_LOGS_SETTINGS: LogsSettings = {
+  retentionLimit: 5_000,
+  retentionDays: 0,
+  lastPrunedAt: null,
+};
+
+export async function readLogsSettings(db: D1Database): Promise<LogsSettings> {
+  const row = await db
+    .prepare(`SELECT value FROM _settings WHERE key = ?`)
+    .bind(LOGS_SETTINGS_KEY)
+    .first<{ value: string | null }>();
+  if (!row?.value) return { ...DEFAULT_LOGS_SETTINGS };
+  try {
+    const parsed = JSON.parse(row.value) as Partial<LogsSettings>;
+    return { ...DEFAULT_LOGS_SETTINGS, ...parsed };
+  } catch {
+    return { ...DEFAULT_LOGS_SETTINGS };
+  }
+}
+
+async function writeLogsSettings(
+  db: D1Database,
+  patch: Partial<LogsSettings>,
+): Promise<LogsSettings> {
+  const current = await readLogsSettings(db);
+  const next: LogsSettings = { ...current, ...patch };
+  await db
+    .prepare(
+      `INSERT INTO _settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .bind(LOGS_SETTINGS_KEY, JSON.stringify(next), Date.now())
+    .run();
+  return next;
+}
+
+const patchSettingsSchema = z.object({
+  retentionLimit: z.number().int().min(0).max(1_000_000).optional(),
+  retentionDays: z.number().int().min(0).max(3650).optional(),
+});
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -187,6 +243,38 @@ logsRouter.get("/summary", requireAuth, async (c) => {
   }
 });
 
+/* ── GET /api/core/logs/settings — read retention settings ── */
+logsRouter.get("/settings", requireAuth, async (c) => {
+  try {
+    const settings = await readLogsSettings(c.env.SYSTEM_DB);
+    return c.json({ settings });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "read_failed", detail: msg }, 500);
+  }
+});
+
+/* ── PATCH /api/core/logs/settings — update retention settings ── */
+logsRouter.patch("/settings", requireAuth, requireRole("admin"), async (c) => {
+  let body: unknown;
+  try {
+    body = JSON.parse(await c.req.text());
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+  const parsed = patchSettingsSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "validation_failed", issues: parsed.error.flatten() }, 400);
+  }
+  try {
+    const next = await writeLogsSettings(c.env.SYSTEM_DB, parsed.data);
+    return c.json({ settings: next });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "write_failed", detail: msg }, 500);
+  }
+});
+
 /* ── GET /api/core/logs — paginated list ── */
 logsRouter.get("/", requireAuth, async (c) => {
   const parsed = listQuerySchema.safeParse(c.req.query());
@@ -277,14 +365,15 @@ export function levelFromStatus(status: number): LogLevel {
   return "info";
 }
 
-/** Hard cap on rows retained in `_logs`. The middleware trims to this
- *  after every write so the table can't grow unbounded. */
-export const LOG_RETENTION_LIMIT = 5_000;
-
 /**
  * Persist a single request log entry + trim old rows. Designed to run
  * inside `c.executionCtx.waitUntil(...)` — never awaits from the
  * request path itself.
+ *
+ * Retention is configured via `_settings.logs`:
+ *   - retentionLimit (>0): keep at most N most-recent rows
+ *   - retentionDays  (>0): drop rows older than N days
+ *   - time-based pruning runs at most once per hour (throttled by lastPrunedAt)
  */
 export async function recordRequest(
   env: Env,
@@ -329,16 +418,34 @@ export async function recordRequest(
       )
       .run();
 
-    // Trim — keep only the most recent LOG_RETENTION_LIMIT rows.
-    await db
-      .prepare(
-        `DELETE FROM _logs
-          WHERE rowid NOT IN (
-            SELECT rowid FROM _logs ORDER BY created_at DESC LIMIT ?
-          )`,
-      )
-      .bind(LOG_RETENTION_LIMIT)
-      .run();
+    // Load retention settings (fall back to defaults if missing).
+    const s = await readLogsSettings(db);
+
+    // Row-count cap — keep only the most recent N rows.
+    if (s.retentionLimit > 0) {
+      await db
+        .prepare(
+          `DELETE FROM _logs
+            WHERE rowid NOT IN (
+              SELECT rowid FROM _logs ORDER BY created_at DESC LIMIT ?
+            )`,
+        )
+        .bind(s.retentionLimit)
+        .run();
+    }
+
+    // Age-based pruning — throttled to at most once per hour so the
+    // hot request path doesn't pay a full table scan on every write.
+    const HOUR_MS = 3_600_000;
+    const now = Date.now();
+    if (
+      s.retentionDays > 0 &&
+      (s.lastPrunedAt === null || now - s.lastPrunedAt >= HOUR_MS)
+    ) {
+      const cutoff = now - s.retentionDays * 86_400_000;
+      await db.prepare(`DELETE FROM _logs WHERE created_at < ?`).bind(cutoff).run();
+      await writeLogsSettings(db, { lastPrunedAt: now });
+    }
   } catch {
     // Swallow — logging must never break the request path. The most
     // common cause is the _logs table not existing yet (pre-install).

@@ -69,6 +69,7 @@ Rule system for public records API (`apiRules` per collection):
 - **Content-Type:** `application/json` unless noted (storage upload is `multipart/form-data`).
 - **Error shape:** `{ error: string }` with appropriate HTTP status (400 / 401 / 403 / 404 / 409 / 422 / 500).
 - **Pagination shape:** `{ items, page, perPage, total, totalPages }`.
+- **CORS:** the API supports split-Worker deployments where the dashboard is served from a different origin than the backend. Allowed origins are resolved in this order: `_settings.deploy.corsOrigins` (set from the Settings UI) → `CORS_ORIGINS` env var (comma-separated) → `DASHBOARD_URL` env var. Browsers from listed origins get `Access-Control-Allow-Origin: <origin>` plus `Allow-Methods`/`Allow-Headers` on preflight `OPTIONS` (returns `204`). Same-origin requests pass through with no CORS headers. Auth is bearer-token-in-localStorage (no cookies), so `Access-Control-Allow-Credentials` is intentionally **not** set. Email-link redirects (magic-link, reset-password) resolve via `_settings.deploy.dashboardUrl` → `DASHBOARD_URL` env var → request origin. To configure split-deploy from the UI: sign in → **Settings → Application → Split-Worker deployment**, set **Dashboard URL** + **Allowed CORS origins**, save. The deploy-settings cache is invalidated on every PATCH so changes take effect within seconds without a redeploy.
 
 ---
 
@@ -664,7 +665,33 @@ A backup captures every `table`, `view`, `index`, and `trigger` from `sqlite_mas
 
 ## 12. Logs
 
-Every API request (`/api/*`) is logged to the `_logs` table by a request-logging middleware in `src/index.ts`. Writes happen in the background via `c.executionCtx.waitUntil(...)` so they never block the response. Level is derived from the response status (`info` < 400, `warn` 400–499, `error` ≥ 500). Retention is capped at 5,000 rows (auto-trimmed after each insert).
+Every API request (`/api/*`) is logged to the `_logs` table by a request-logging middleware in `src/index.ts`. Writes happen in the background via `c.executionCtx.waitUntil(...)` so they never block the response. Level is derived from the response status (`info` < 400, `warn` 400–499, `error` ≥ 500). Retention is configurable via the `/api/core/logs/settings` endpoints below (defaults: 5,000 rows, no age-based pruning).
+
+### `GET /api/core/logs/settings`
+- **Auth:** Superuser JWT (any role)
+- **Purpose:** Read the log retention configuration stored under `_settings.logs`.
+- **Response 200:**
+```json
+{
+  "settings": {
+    "retentionLimit": 5000,
+    "retentionDays": 0,
+    "lastPrunedAt": null
+  }
+}
+```
+- `retentionLimit` — max rows to keep. `0` disables the row-count cap. Applied on every insert (oldest rows trimmed).
+- `retentionDays` — max age in days. `0` disables time-based pruning. The sweep runs at most once per hour.
+- `lastPrunedAt` — epoch-ms of the last time-based sweep (informational).
+
+### `PATCH /api/core/logs/settings`
+- **Auth:** Superuser JWT — **admin only**
+- **Body:**
+```json
+{ "retentionLimit": 10000, "retentionDays": 30 }
+```
+- **Validation:** `retentionLimit` integer 0–1,000,000; `retentionDays` integer 0–3,650. Both optional (merge update).
+- **Response 200:** `{ settings: LogsSettings }` (full merged object after update)
 
 ### `GET /api/core/logs/timeseries`
 - **Auth:** Superuser JWT (any role)
@@ -737,6 +764,7 @@ System-wide key/value store backed by the `_settings` table (one row per key, JS
   - **`rateLimit`** — `{ enabled: boolean, rules: RateLimitRule[] }` where each rule is `{ id, label, maxRequests, interval, target }`. When enabled, the rate limit middleware checks each `/api/*` request against the rules and returns `429` if a per-IP limit is exceeded. Rule labels support patterns: `*.auth` (path contains keyword), `*.create` (POST to /records or /create), `/api/` (prefix), `/` (catch-all). Response 429: `{ error: "rate_limited", detail, retryAfter }` with `Retry-After` header.
   - `senderName`, `senderEmail`, `smtpHost`, `smtpPort`, `smtpUser`, `smtpPassword`, `smtpSecure` — mail/SMTP
   - `backups` — `{ autoEnabled, intervalHours, maxRetention, lastAutoAt }`
+  - `logs` — `{ retentionLimit, retentionDays, lastPrunedAt }` (also exposed via `/api/core/logs/settings`)
   - **`timezone`** — IANA zone (e.g. `"America/New_York"`); empty/undefined means "browser default". Drives every dashboard timestamp via `Intl.DateTimeFormat`.
   - **`dateTimeFormat`** — one of `iso8601`, `compact`, `long`, `us`, `european`, `custom`. Dashboard preset for rendering timestamps.
   - **`customDateTimePattern`** — token template (e.g. `"YYYY-MM-DD HH:mm"`), only consulted when `dateTimeFormat === "custom"`. Tokens: `YYYY`, `YY`, `MMMM`, `MMM`, `MM`, `DD`, `HH`, `hh`, `mm`, `ss`, `a`, `Z`, `z`. Literals wrapped in `[brackets]`.

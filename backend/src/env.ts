@@ -33,6 +33,17 @@ export interface Env {
    * where the Worker serves the built dashboard).
    */
   DASHBOARD_URL?: string;
+  /**
+   * Comma-separated list of origins permitted to make cross-origin browser
+   * requests to this Worker's API (CORS). Used when the dashboard is
+   * deployed to a different origin than the backend (split-Worker mode).
+   * If unset, falls back to `DASHBOARD_URL` (so the common case — one
+   * dashboard origin — works without an extra var). Same-origin requests
+   * pass through untouched regardless of this setting.
+   *
+   * Example: "https://app.example.com,https://staging.example.com"
+   */
+  CORS_ORIGINS?: string;
 }
 
 /**

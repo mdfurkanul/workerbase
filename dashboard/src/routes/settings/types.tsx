@@ -10,6 +10,7 @@ import {
   Key,
   Mail,
   Mailbox,
+  ScrollText,
   Upload,
 } from "lucide-react";
 
@@ -21,6 +22,7 @@ export type SectionId =
   | "systemEmails"
   | "storage"
   | "backups"
+  | "logs"
   | "crons"
   | "apiTokens"
   | "export"
@@ -48,6 +50,7 @@ export const NAV: NavGroup[] = [
       { id: "systemEmails", label: "System emails", icon: <Mailbox size={13} /> },
       { id: "storage", label: "Files storage", icon: <FolderOpen size={13} /> },
       { id: "backups", label: "Backups", icon: <HardDrive size={13} /> },
+      { id: "logs", label: "Logs", icon: <ScrollText size={13} /> },
       { id: "crons", label: "Crons", icon: <Clock size={13} /> },
       { id: "apiTokens", label: "API tokens", icon: <Key size={13} /> },
     ],
@@ -73,6 +76,7 @@ export const LABELS: Record<SectionId, string> = {
   systemEmails: "System emails",
   storage: "Files storage",
   backups: "Backups",
+  logs: "Logs",
   crons: "Crons",
   apiTokens: "API tokens",
   export: "Export collections",

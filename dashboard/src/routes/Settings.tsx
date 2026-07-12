@@ -10,6 +10,7 @@ import { MailForm } from "./settings/MailForm";
 import { SystemEmailsForm } from "./settings/SystemEmailsForm";
 import { StorageForm } from "./settings/StorageForm";
 import { BackupsForm } from "./settings/BackupsForm";
+import { LogsForm } from "./settings/LogsForm";
 import { CronsForm } from "./settings/CronsForm";
 import { ApiTokensForm } from "./settings/ApiTokensForm";
 import { ExportForm } from "./settings/ExportForm";
@@ -47,6 +48,7 @@ export default function Settings() {
             {active === "systemEmails" && <SystemEmailsForm />}
             {active === "storage" && <StorageForm />}
             {active === "backups" && <BackupsForm />}
+            {active === "logs" && <LogsForm />}
             {active === "crons" && <CronsForm />}
             {active === "apiTokens" && <ApiTokensForm />}
             {active === "export" && <ExportForm />}

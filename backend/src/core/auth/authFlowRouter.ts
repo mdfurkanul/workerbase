@@ -18,17 +18,21 @@ import {
   normalizeRole,
 } from "./superuserSchemas.js";
 import { sendEmail } from "../../emails/sendEmail.js";
+import { resolveDashboardUrl } from "../settings/deploymentSettings.js";
 
 /**
  * Resolve the base URL that email action links should point at.
  *
- * In local dev the dashboard runs on the Vite dev server (e.g.
- * http://localhost:5173) because the Worker's serveStatic can't serve the
- * SPA bundle from `wrangler dev`. In production this is unset and we fall
- * back to the request origin — the Worker serves the built dashboard.
+ * Precedence: `_settings.deploy.dashboardUrl` → `env.DASHBOARD_URL` →
+ * request origin. Reads from D1 (cached) so the Settings UI can change
+ * this without a redeploy.
  */
-function dashboardBaseURL(env: Env, reqURL: URL): string {
-  return env.DASHBOARD_URL?.replace(/\/$/, "") ?? `${reqURL.origin}`;
+async function dashboardBaseURL(
+  db: D1Database,
+  env: Env,
+  reqURL: URL,
+): Promise<string> {
+  return resolveDashboardUrl(db, env, reqURL.origin);
 }
 
 /**
@@ -135,7 +139,7 @@ authFlowRouter.post("/magic-request", async (c) => {
   );
 
   const url = new URL(c.req.url);
-  const actionURL = `${dashboardBaseURL(c.env, url)}/magic-login?token=${value}`;
+  const actionURL = `${await dashboardBaseURL(c.env.SYSTEM_DB, c.env, url)}/magic-login?token=${value}`;
 
   // Always attempt delivery via the Email Service binding (simulated
   // locally — wrangler logs the content to the console). Also keep a
@@ -232,7 +236,7 @@ authFlowRouter.post("/forgot-password", async (c) => {
   );
 
   const url = new URL(c.req.url);
-  const actionURL = `${dashboardBaseURL(c.env, url)}/reset-password?token=${value}`;
+  const actionURL = `${await dashboardBaseURL(c.env.SYSTEM_DB, c.env, url)}/reset-password?token=${value}`;
 
   c.executionCtx.waitUntil(
     sendEmail(c.env, {

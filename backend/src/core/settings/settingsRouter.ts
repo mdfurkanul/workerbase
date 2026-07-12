@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { Env } from "../../env.js";
 import { requireAuth, requireRole } from "../../auth/middleware.js";
 import { invalidateRateLimitCache } from "../../ratelimit/middleware.js";
+import { invalidateDeploySettingsCache } from "./deploymentSettings.js";
 
 export const settingsRouter = new Hono<{ Bindings: Env }>();
 
@@ -86,6 +87,12 @@ settingsRouter.patch("/", requireAuth, requireRole("admin"), async (c) => {
   // middleware picks up the new config on the next request.
   if (entries.some(([k]) => k === "rateLimit")) {
     invalidateRateLimitCache();
+  }
+
+  // If deploy settings (dashboard URL / CORS origins) changed, invalidate
+  // the deploy cache so CORS + email-link redirects pick up the new values.
+  if (entries.some(([k]) => k === "deploy")) {
+    invalidateDeploySettingsCache();
   }
 
   // Re-read the full settings blob so callers can reconcile state without

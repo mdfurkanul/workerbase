@@ -9,7 +9,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { apiClient, ApiError } from "@/lib/api-client";
+import { apiClient, ApiError, getApiBase } from "@/lib/api-client";
 import { usePrefs } from "@/hooks/usePrefs";
 import { Card } from "./primitives";
 import Toggle from "@/components/Toggle";
@@ -573,7 +573,7 @@ export function BackupsForm() {
     setDownloadingId(b.id);
     try {
       const token = localStorage.getItem("workerbase.token") ?? "";
-      const base = import.meta.env.VITE_API_BASE_URL ?? "";
+      const base = getApiBase();
       const url = `${base}/api/core/backups/${encodeURIComponent(b.id)}`;
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,

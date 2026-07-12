@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, Trash2, X, Check, Pencil, Download } from "lucide-react";
-import { apiClient, ApiError, getToken } from "@/lib/api-client";
+import { apiClient, ApiError, getToken, getApiBase } from "@/lib/api-client";
 import { useAuth, canEdit } from "@/hooks/useAuth";
 import { usePrefs } from "@/hooks/usePrefs";
 import {
@@ -195,7 +195,7 @@ export default function RecordDrawer({
     setSaving(true);
     try {
       const token = getToken();
-      const base = import.meta.env.VITE_API_BASE_URL ?? "";
+      const base = getApiBase();
       const res = await fetch(
         `${base}/api/core/backups/${encodeURIComponent(id)}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : undefined },

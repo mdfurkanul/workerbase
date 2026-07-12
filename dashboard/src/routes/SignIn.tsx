@@ -106,7 +106,13 @@ export default function SignIn() {
         </button>
 
         <p className="text-[12px] text-ink-faint">
-          No public registration. Accounts are provisioned by a superuser.
+          No public registration. Accounts are provisioned by a superuser.{" "}
+          <Link
+            to="/setup"
+            className="text-ink-muted hover:text-brand transition underline-offset-2 hover:underline"
+          >
+            Configure backend URL
+          </Link>
         </p>
       </form>
     </AuthLayout>
