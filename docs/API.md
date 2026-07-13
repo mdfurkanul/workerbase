@@ -479,6 +479,10 @@ File: `backend/src/core/sql/sqlQueriesRouter.ts`
 - **Auth:** Superuser JWT (any role)
 - **Body:** `sql` (string, 1–8192, required; must be safe SELECT or PRAGMA)
 - **Response 200:** `{ ok, columns, rows, rowCount, error? }`
+- **Errors:**
+  - `400 { error: "unsafe_query" }` — non-SELECT/PRAGMA, stacked `;`, or forbidden keywords (INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE/ATTACH/DETACH/REPLACE/GRANT/REVOKE/VACUUM/REINDEX)
+  - `400 { error: "validation_failed" }` — `sql` missing or > 8192 chars
+  - `403 { error: "protected_table", table }` — query references a protected system table (`_*`, `sqlite_*`, `_cf_*`, `d1_*`, `_wb_restore_*`); scanned in FROM/JOIN clauses including subqueries
 
 ---
 

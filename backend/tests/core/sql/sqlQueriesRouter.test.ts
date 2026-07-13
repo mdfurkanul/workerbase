@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
+import {
+  isProtectedTable,
+  referencesProtectedTable,
+  isSafeSelect,
+} from "../../../src/core/sql/sqlQueriesRouter.js";
 
 /* ═══════════════════════════════════════════════════════════════════
    SQL Queries API — Zod validation tests
@@ -108,4 +113,57 @@ describe("DELETE /api/core/sql/queries/:id — Delete query", () => {
 
   // 5. Auth — invalid token
   it("returns 401 with invalid/expired token", () => { expect(true).toBe(true); });
+});
+
+describe("POST /api/core/sql/execute — Protected-table guard", () => {
+  // 1. Happy path — user table is allowed
+  it("allows SELECT from a user-created table", () => {
+    expect(referencesProtectedTable("SELECT * FROM articles")).toBeNull();
+  });
+
+  // 2. Blocks _superusers (password hashes)
+  it("blocks SELECT from _superusers", () => {
+    expect(referencesProtectedTable("SELECT * FROM _superusers")).toBe("_superusers");
+  });
+
+  // 3. Blocks _tokens (reset/magic-link hashes)
+  it("blocks SELECT from _tokens", () => {
+    expect(referencesProtectedTable("SELECT * FROM _tokens")).toBe("_tokens");
+  });
+
+  // 4. Blocks via JOIN clause
+  it("blocks _apiTokens referenced in a JOIN", () => {
+    expect(referencesProtectedTable("SELECT a.title FROM articles a JOIN _apiTokens t ON a.id = t.id")).toBe("_apiTokens");
+  });
+
+  // 5. Blocks sqlite_master
+  it("blocks sqlite_master", () => {
+    expect(referencesProtectedTable("SELECT * FROM sqlite_master")).toBe("sqlite_master");
+  });
+
+  // 6. Edge case — subquery referencing a protected table
+  it("blocks protected table inside a subquery", () => {
+    expect(referencesProtectedTable("SELECT title FROM articles WHERE id IN (SELECT record_ref FROM _tokens)")).toBe("_tokens");
+  });
+
+  // 7. isSafeSelect — rejects DML/DDL
+  it("isSafeSelect rejects DROP", () => {
+    expect(isSafeSelect("DROP TABLE articles")).toBe(false);
+  });
+
+  // 8. isSafeSelect — rejects stacked queries
+  it("isSafeSelect rejects stacked semicolons", () => {
+    expect(isSafeSelect("SELECT 1; DROP TABLE articles")).toBe(false);
+  });
+
+  // 9. isSafeSelect — accepts plain SELECT
+  it("isSafeSelect accepts a plain SELECT", () => {
+    expect(isSafeSelect("SELECT * FROM articles LIMIT 10")).toBe(true);
+  });
+
+  // 10. isProtectedTable — underscore prefix
+  it("isProtectedTable flags any underscore-prefixed table", () => {
+    expect(isProtectedTable("_anything")).toBe(true);
+    expect(isProtectedTable("articles")).toBe(false);
+  });
 });

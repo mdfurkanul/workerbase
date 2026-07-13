@@ -161,6 +161,23 @@ export function Cell({
     return <span className="font-mono text-ink-muted whitespace-nowrap">{String(value)}</span>;
   }
 
+  // `relation` fields — stored as a plain ID (single) or JSON array of IDs
+  // (multiple). Show a compact label instead of raw JSON.
+  if (fieldType === "relation") {
+    let display = String(value);
+    try {
+      const parsed = JSON.parse(display);
+      if (Array.isArray(parsed)) {
+        if (parsed.length === 0) display = "";
+        else display = `${parsed.length} record${parsed.length === 1 ? "" : "s"}`;
+      }
+    } catch {
+      // Not JSON — it's a plain ID string, show a truncated form.
+    }
+    if (display === "") return <span className="text-ink-faint">N/A</span>;
+    return <span className="font-mono text-[12px] text-ink-muted">{display}</span>;
+  }
+
   if (typeof value === "boolean") {
     return value ? (
       <span className="badge badge-ok">true</span>

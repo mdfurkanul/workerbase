@@ -66,11 +66,16 @@ export function invalidateRateLimitCache(): void {
 // ── IP extraction ──────────────────────────────────────────────────
 
 function getClientIP(c: Parameters<MiddlewareHandler<{ Bindings: Env }>>[0]): string {
-  return (
-    c.req.header("CF-Connecting-IP") ||
-    c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() ||
-    "unknown"
-  );
+  // CF-Connecting-IP is set by Cloudflare and is trustworthy on the edge.
+  // X-Forwarded-For is client-controlled and only honored in local dev (where
+  // there is no Cloudflare in front). In production we fall back to "unknown"
+  // rather than trusting a spoofable header.
+  const cfIP = c.req.header("CF-Connecting-IP");
+  if (cfIP) return cfIP;
+  if (c.env.ENVIRONMENT === "local") {
+    return c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() || "unknown";
+  }
+  return "unknown";
 }
 
 // ── Middleware ─────────────────────────────────────────────────────

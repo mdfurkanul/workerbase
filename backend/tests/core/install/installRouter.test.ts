@@ -146,4 +146,14 @@ describe("DEFAULT_SETTINGS", () => {
     expect(typeof DEFAULT_SETTINGS.appName).toBe("string");
     expect((DEFAULT_SETTINGS.appName as string).length).toBeGreaterThan(0);
   });
+
+  // 8. Rate limiting is enabled by default with brute-force rules
+  it("enables rate limiting by default with login protection rules", () => {
+    const rl = DEFAULT_SETTINGS.rateLimit as { enabled: boolean; rules: { id: string; label: string; maxRequests: number; interval: number }[] };
+    expect(rl.enabled).toBe(true);
+    expect(rl.rules.length).toBeGreaterThanOrEqual(1);
+    const labels = rl.rules.map((r) => r.label);
+    expect(labels).toContain("/api/core/superusers/login");
+    expect(labels).toContain("*.auth");
+  });
 });

@@ -13,12 +13,20 @@ import { opt } from "./types";
 /** True when the field is "empty" for required-check purposes. */
 export function isEmptyValue(field: CollectionField, v: unknown): boolean {
   const s = typeof v === "string" ? v : "";
-  if (s.trim() !== "") return false;
+  if (s.trim() === "") return true;
+  // For multiple relations, an empty JSON array '[]' means no selection.
+  if (
+    field.type === "relation" &&
+    opt(field, "relationType") === "multiple" &&
+    s.trim() === "[]"
+  ) {
+    return true;
+  }
   // `editor` may emit an empty paragraph — treat that as empty too.
   if (field.type === "editor") {
-    return s === "" || s === "<p></p>" || s === "<p><br></p>" || s === "<br>";
+    return s === "<p></p>" || s === "<p><br></p>" || s === "<br>";
   }
-  return true;
+  return false;
 }
 
 const RE_INT = /^-?\d+$/;

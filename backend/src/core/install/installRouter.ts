@@ -54,8 +54,28 @@ const DEFAULT_SETTINGS: Record<string, unknown> = {
   mail: { fromAddress: "", fromName: "" },
   // Storage upload rules
   storage: { maxFileSizeMB: 50, allowedTypes: ["image/*", "application/pdf"] },
-  // Rate limiting (off by default until the user opts in)
-  rateLimit: { enabled: false, rules: [] },
+  // Rate limiting — enabled by default with brute-force protection on auth
+  // endpoints. Users can tune or disable via Settings. Existing installs are
+  // unaffected (seeder uses ON CONFLICT DO NOTHING).
+  rateLimit: {
+    enabled: true,
+    rules: [
+      {
+        id: "default-superuser-login",
+        label: "/api/core/superusers/login",
+        maxRequests: 10,
+        interval: 60,
+        target: "anonymous",
+      },
+      {
+        id: "default-collection-auth",
+        label: "*.auth",
+        maxRequests: 20,
+        interval: 60,
+        target: "anonymous",
+      },
+    ],
+  },
   // Feature-specific retention / scheduling
   backups: { ...DEFAULT_BACKUPS_SETTINGS },
   logs: { ...DEFAULT_LOGS_SETTINGS },

@@ -211,7 +211,7 @@ export function isProtectedTable(name: string): boolean {
  * against the protected-table list. Catches sub-selects and CTEs because
  * the regex scans the entire SQL string.
  */
-function referencesProtectedTable(sql: string): string | null {
+export function referencesProtectedTable(sql: string): string | null {
   const tablePattern = /\b(?:FROM|JOIN)\s+["'`]?(\w+)["'`]?\b/gi;
   let match: RegExpExecArray | null;
   while ((match = tablePattern.exec(sql)) !== null) {
@@ -221,7 +221,7 @@ function referencesProtectedTable(sql: string): string | null {
   return null;
 }
 
-function isSafeSelect(raw: string): boolean {
+export function isSafeSelect(raw: string): boolean {
   const q = raw.trim();
   if (!q || q.includes(";")) return false;
   if (!/^SELECT\b|^PRAGMA\b/i.test(q)) return false;
@@ -247,6 +247,11 @@ sqlQueriesRouter.post("/execute", requireAuth, async (c) => {
 
   if (!isSafeSelect(sql)) {
     return c.json({ error: "unsafe_query", message: "Only read-only SELECT or PRAGMA statements are allowed." }, 400);
+  }
+
+  const protectedTable = referencesProtectedTable(sql);
+  if (protectedTable) {
+    return c.json({ error: "protected_table", table: protectedTable, message: `Queries against "${protectedTable}" are not allowed.` }, 403);
   }
 
   try {
